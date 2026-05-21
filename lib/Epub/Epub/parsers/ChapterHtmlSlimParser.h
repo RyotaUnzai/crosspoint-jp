@@ -63,6 +63,7 @@ class ChapterHtmlSlimParser {
   std::string imageBasePath;
   int imageCounter = 0;
   bool verticalMode = false;
+  bool parseAborted = false;
 
   // Style tracking (replaces depth-based approach)
   struct StyleStackEntry {
@@ -112,6 +113,7 @@ class ChapterHtmlSlimParser {
   void flushPartWordBuffer();
   void makePages();
   void flushTableAsGrid();
+  bool hasEnoughHeapForPageBuild(const char* context);
   // XML callbacks
   static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char** atts);
   static void XMLCALL characterData(void* userData, const XML_Char* s, int len);

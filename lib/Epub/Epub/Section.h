@@ -40,8 +40,10 @@ class Section {
                          uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool firstLineIndent,
                          bool embeddedStyle, uint8_t imageRendering, bool verticalMode, uint8_t charSpacing,
                          const std::function<void()>& popupFn = nullptr, const int* headingFontIds = nullptr,
-                         int tableFontId = 0);
+                         int tableFontId = 0,
+                         const std::function<void(uint16_t pagesDone, uint16_t estimatedPages)>& progressFn = nullptr);
   std::unique_ptr<Page> loadPageFromSectionFile();
+  std::unique_ptr<Page> loadPageFromSectionFile(uint16_t pageNumber);
 
   // Look up the page number for an anchor id from the section cache file.
   std::optional<uint16_t> getPageForAnchor(const std::string& anchor) const;

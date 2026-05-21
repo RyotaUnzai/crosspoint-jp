@@ -1,4 +1,4 @@
-#include "GenerateAllCacheActivity.h"
+﻿#include "GenerateAllCacheActivity.h"
 
 #include <Epub.h>
 #include <Epub/Section.h>
@@ -115,7 +115,7 @@ void GenerateAllCacheActivity::generateAllCaches() {
   }
 
   // Show progress popup
-  Rect popupRect = GUI.drawPopup(renderer, tr(STR_GENERATING_ALL_CACHE));
+  Rect popupRect = GUI.drawPopup(renderer, tr(STR_GENERATING_ALL_CACHE), "Progress 0%");
   GUI.fillPopupProgress(renderer, popupRect, 0);
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 
@@ -138,6 +138,8 @@ void GenerateAllCacheActivity::generateAllCaches() {
 
     // Update progress
     const int progress = (bookIdx * 100) / totalCount;
+    const std::string progressText = std::string("Progress ") + std::to_string(progress) + "%";
+    popupRect = GUI.drawPopup(renderer, tr(STR_GENERATING_ALL_CACHE), progressText.c_str());
     GUI.fillPopupProgress(renderer, popupRect, progress);
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 
@@ -248,6 +250,7 @@ void GenerateAllCacheActivity::generateAllCaches() {
     processedCount++;
   }
 
+  popupRect = GUI.drawPopup(renderer, tr(STR_GENERATING_ALL_CACHE), "Progress 100%");
   GUI.fillPopupProgress(renderer, popupRect, 100);
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
   delay(500);
@@ -280,3 +283,4 @@ void GenerateAllCacheActivity::loop() {
     return;
   }
 }
+

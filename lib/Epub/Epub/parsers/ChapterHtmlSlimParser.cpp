@@ -24,7 +24,10 @@ constexpr size_t MIN_SIZE_FOR_POPUP = 10 * 1024;  // 10KB
 constexpr size_t PARSE_BUFFER_SIZE = 1024;
 // Minimum free heap to continue parsing. Below this, stop gracefully
 // to prevent abort() from failed allocations (no C++ exceptions on ESP32).
-constexpr size_t MIN_FREE_HEAP_FOR_PARSING = 20 * 1024;  // 20KB
+// The parser now keeps a slightly tighter margin because vertical CJK layout
+// can run comfortably below the previous 40KB guard once zero-height glyphs are fixed.
+constexpr size_t MIN_FREE_HEAP_FOR_PARSING = 28 * 1024;  // 28KB
+constexpr int VERTICAL_FIRST_COLUMN_INSET = 24;
 
 const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote"};
 constexpr int NUM_BLOCK_TAGS = sizeof(BLOCK_TAGS) / sizeof(BLOCK_TAGS[0]);
@@ -80,6 +83,10 @@ bool isCjkCodepointForSplit(const uint32_t cp) {
   if (cp >= 0xF900 && cp <= 0xFAFF) return true;
   // Fullwidth forms: U+FF00 - U+FFEF
   if (cp >= 0xFF00 && cp <= 0xFFEF) return true;
+  // Vertical punctuation that should not become one long sideways word.
+  if (cp == 0x2014 || cp == 0x2015) return true;  // em dash / horizontal bar
+  if (cp == 0x2025 || cp == 0x2026) return true;  // two-dot / ellipsis
+  if (cp == 0x22EF) return true;                  // midline ellipsis
   return false;
 }
 
@@ -154,6 +161,25 @@ bool isTableStructuralTag(const char* name) {
   return strcmp(name, "table") == 0 || strcmp(name, "tr") == 0 || strcmp(name, "td") == 0 || strcmp(name, "th") == 0;
 }
 
+int getVerticalStartX(const uint16_t viewportWidth, const int columnWidth) {
+  return std::max(0, static_cast<int>(viewportWidth) - columnWidth - VERTICAL_FIRST_COLUMN_INSET);
+}
+
+int getVerticalStartInsetForBlock(const BlockStyle& blockStyle, const int columnHeight) {
+  int inset = VERTICAL_FIRST_COLUMN_INSET;
+  const bool headingLike = blockStyle.drawSeparatorBelow || blockStyle.alignment == CssTextAlign::Center;
+  if (headingLike) {
+    inset += std::max(4, columnHeight / 6);
+  }
+  return inset;
+}
+
+int getVerticalStartXForBlock(const uint16_t viewportWidth, const int columnWidth, const BlockStyle& blockStyle,
+                              const int columnHeight) {
+  const int inset = getVerticalStartInsetForBlock(blockStyle, columnHeight);
+  return std::max(0, static_cast<int>(viewportWidth) - columnWidth - inset);
+}
+
 // Update effective bold/italic/underline based on block style and inline style stack
 void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   // Start with block-level styles
@@ -178,6 +204,15 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
 
 // flush the contents of partWordBuffer to currentTextBlock
 void ChapterHtmlSlimParser::flushPartWordBuffer() {
+  if (parseAborted) return;
+  if (partWordBufferIndex == 0) return;
+
+  if (!hasEnoughHeapForPageBuild("flushPartWordBuffer")) {
+    partWordBufferIndex = 0;
+    nextWordContinues = false;
+    return;
+  }
+
   // Determine font style from depth-based tracking and CSS effective style
   const bool isBold = boldUntilDepth < depth || effectiveBold;
   const bool isItalic = italicUntilDepth < depth || effectiveItalic;
@@ -217,8 +252,21 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   nextWordContinues = false;
 }
 
+bool ChapterHtmlSlimParser::hasEnoughHeapForPageBuild(const char* context) {
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  if (freeHeap >= MIN_FREE_HEAP_FOR_PARSING) {
+    return true;
+  }
+
+  LOG_ERR("EHP", "Low heap in %s (%u bytes free, need %zu), stopping page build safely", context, freeHeap,
+          MIN_FREE_HEAP_FOR_PARSING);
+  parseAborted = true;
+  return false;
+}
+
 // start a new text block if needed
 void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
+  if (parseAborted) return;
   nextWordContinues = false;  // New block = new paragraph, no continuation
   if (currentTextBlock) {
     // already have a text block running and it is empty - just reuse it
@@ -248,6 +296,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
 
 void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  if (self->parseAborted) return;
 
   // Middle of skip
   if (self->skipUntilDepth < self->depth) {
@@ -817,6 +866,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
 void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char* s, const int len) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  if (self->parseAborted) return;
 
   // Skip content of nested table
   if (self->tableDepth > 1) {
@@ -980,12 +1030,30 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     i += charLen;
   }
 
-  // Flush buffered words to free memory. The standard threshold is 750 words, but when free heap
-  // is low we flush earlier to prevent abort() from vector reallocation failure (operator new
-  // cannot return nullptr without std::nothrow, and C++ exceptions are disabled on ESP32).
+  // Flush buffered words to free memory. We keep the block reasonably small so long vertical
+  // sections with ruby do not build up huge intermediate vectors before pagination.
   const size_t wordCount = self->currentTextBlock->size();
-  const bool normalFlush = wordCount > 750;
-  const bool earlyFlush = wordCount > 100 && ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_PARSING * 2;
+  const size_t rubyWordCount = self->currentTextBlock->getRubyWordCount();
+
+  // Ruby-heavy text benefits from smaller batches because each word carries extra
+  // measurements and wider vertical slots.
+  size_t normalFlushLimit = 560;
+  if (rubyWordCount > 0) {
+    const float rubyDensity = static_cast<float>(rubyWordCount) / static_cast<float>(std::max<size_t>(1, wordCount));
+    if (rubyDensity >= 0.25f) {
+      normalFlushLimit = 300;
+    } else if (rubyDensity >= 0.15f) {
+      normalFlushLimit = 360;
+    } else if (rubyDensity >= 0.08f) {
+      normalFlushLimit = 460;
+    }
+  }
+
+  const bool normalFlush = wordCount > normalFlushLimit;
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  const uint32_t maxAllocHeap = ESP.getMaxAllocHeap();
+  const bool earlyFlush = wordCount > 120 &&
+                          (freeHeap < MIN_FREE_HEAP_FOR_PARSING * 2 || maxAllocHeap < 32 * 1024);
   if (normalFlush || earlyFlush) {
     LOG_DBG("EHP", "Text block too long, splitting into multiple pages");
     if (self->verticalMode) {
@@ -1009,6 +1077,9 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
 }
 
 void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const XML_Char* s, const int len) {
+  auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  if (self->parseAborted) return;
+
   // Check if this looks like an entity reference (&...;)
   if (len >= 3 && s[0] == '&' && s[len - 1] == ';') {
     const char* utf8Value = lookupHtmlEntity(s, static_cast<size_t>(len));
@@ -1026,6 +1097,7 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  if (self->parseAborted) return;
 
   // Check if any style state will change after we decrement depth
   // If so, we MUST flush the partWordBuffer with the CURRENT style first
@@ -1078,7 +1150,7 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
       self->currentPageNextY = 0;
       if (self->verticalMode) {
         const int lineHeight = self->renderer.getLineHeight(self->fontId) * self->lineCompression;
-        self->currentPageNextX = self->viewportWidth - lineHeight;
+        self->currentPageNextX = getVerticalStartX(self->viewportWidth, lineHeight);
       }
     }
   }
@@ -1282,6 +1354,16 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
       return false;
     }
 
+    if (parseAborted) {
+      LOG_ERR("EHP", "Page build aborted while parsing (%u bytes free)", ESP.getFreeHeap());
+      XML_StopParser(parser, XML_FALSE);
+      XML_SetElementHandler(parser, nullptr, nullptr);
+      XML_SetCharacterDataHandler(parser, nullptr);
+      XML_ParserFree(parser);
+      file.close();
+      return false;
+    }
+
     // Periodic heap check during parsing to prevent abort() from failed allocations
     if (!done && ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_PARSING) {
       LOG_ERR("EHP", "Low heap during parsing (%u bytes), stopping gracefully", ESP.getFreeHeap());
@@ -1293,7 +1375,9 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
       return false;
     }
   } while (!done);
-  LOG_DBG("EHP", "Time to parse and build pages: %lu ms", millis() - chapterStartTime);
+  const uint32_t parseElapsedMs = millis() - chapterStartTime;
+  LOG_DBG("EHP", "Time to parse and build pages: %lu ms (%.2f s)", parseElapsedMs,
+          static_cast<double>(parseElapsedMs) / 1000.0);
 
   XML_StopParser(parser, XML_FALSE);                // Stop any pending processing
   XML_SetElementHandler(parser, nullptr, nullptr);  // Clear callbacks
@@ -1303,7 +1387,14 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
 
   // Process last page if there is still text
   if (currentTextBlock) {
+    if (!hasEnoughHeapForPageBuild("final makePages")) {
+      return false;
+    }
     makePages();
+    if (parseAborted) {
+      LOG_ERR("EHP", "Page build aborted while finalizing (%u bytes free)", ESP.getFreeHeap());
+      return false;
+    }
     if (!pendingAnchorId.empty()) {
       anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
       pendingAnchorId.clear();
@@ -1318,25 +1409,43 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
 }
 
 void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
+  if (parseAborted) return;
+  if (!hasEnoughHeapForPageBuild("addLineToPage")) return;
+
   const int effectiveFontId = (line->getBlockStyle().fontId != 0) ? line->getBlockStyle().fontId : fontId;
-  const int lineHeight = renderer.getLineHeight(effectiveFontId) * lineCompression;
+  const int baseLineHeight = renderer.getLineHeight(effectiveFontId) * lineCompression;
+  const bool lineHasRuby = line->hasRuby() && TextBlock::rubyFontId != 0;
+  const int rubyGap = lineHasRuby ? std::max(4, renderer.getLineHeight(TextBlock::rubyFontId) / 4) : 0;
+  const int lineHeight = baseLineHeight + (lineHasRuby ? renderer.getLineHeight(TextBlock::rubyFontId) + rubyGap : 0);
+  const int baseColumnWidth =
+      std::max(1, renderer.getTextAdvanceX(effectiveFontId, "\xE4\xB8\x80", EpdFontFamily::REGULAR));
 
   if (verticalMode) {
     // Vertical mode: columns placed right-to-left
-    const int columnWidth = lineHeight;
+    const bool reserveRubyLane = TextBlock::rubyFontId != 0;
+    const int verticalRubyGap = reserveRubyLane ? std::max(4, renderer.getLineHeight(TextBlock::rubyFontId) / 4) : 0;
+    const int rubyLaneWidth =
+        reserveRubyLane
+            ? std::max(renderer.getLineHeight(TextBlock::rubyFontId), static_cast<int>(line->getVerticalRubyWidth()))
+            : 0;
+    const int columnWidth = std::max(1, baseColumnWidth + (reserveRubyLane ? verticalRubyGap + rubyLaneWidth : 0));
     const int columnSpacing = columnWidth / 4;
 
     if (!currentPage) {
       currentPage.reset(new Page());
-      currentPageNextX = viewportWidth - columnWidth;  // start from right edge
+      currentPageNextX = getVerticalStartX(viewportWidth, columnWidth);  // start from right edge with a small inset
+    }
+
+    if (currentPage->elements.empty()) {
+      currentPageNextX = getVerticalStartX(viewportWidth, columnWidth);
     }
 
     if (currentPageNextX < 0) {
-      // Page full — emit and start new page
+      // Page full - emit and start new page
       completePageFn(std::move(currentPage));
       completedPageCount++;
       currentPage.reset(new Page());
-      currentPageNextX = viewportWidth - columnWidth;
+      currentPageNextX = getVerticalStartX(viewportWidth, columnWidth);
     }
 
     // Track cumulative words for footnote assignment
@@ -1543,6 +1652,9 @@ void ChapterHtmlSlimParser::flushTableAsGrid() {
 }
 
 void ChapterHtmlSlimParser::makePages() {
+  if (parseAborted) return;
+  if (!hasEnoughHeapForPageBuild("makePages")) return;
+
   if (!currentTextBlock) {
     LOG_ERR("EHP", "!! No text block to make pages for !!");
     return;
@@ -1551,16 +1663,18 @@ void ChapterHtmlSlimParser::makePages() {
   if (!currentPage) {
     currentPage.reset(new Page());
     currentPageNextY = 0;
-    if (verticalMode) {
-      const int lineHeight = renderer.getLineHeight(fontId) * lineCompression;
-      currentPageNextX = viewportWidth - lineHeight;
-    }
   }
 
   const int lineHeight = renderer.getLineHeight(fontId) * lineCompression;
 
   // Apply top spacing before the paragraph (stored in pixels)
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
+  const int layoutFontId = (blockStyle.fontId != 0) ? blockStyle.fontId : fontId;
+  if (verticalMode && currentPage->elements.empty()) {
+    const int columnHeight = std::max(1, static_cast<int>(renderer.getLineHeight(layoutFontId) * lineCompression));
+    currentPageNextX = getVerticalStartXForBlock(viewportWidth, columnHeight, blockStyle, columnHeight);
+  }
+
   if (blockStyle.marginTop > 0) {
     currentPageNextY += blockStyle.marginTop;
   }
@@ -1573,7 +1687,6 @@ void ChapterHtmlSlimParser::makePages() {
   const uint16_t effectiveWidth =
       (horizontalInset < viewportWidth) ? static_cast<uint16_t>(viewportWidth - horizontalInset) : viewportWidth;
 
-  const int layoutFontId = (blockStyle.fontId != 0) ? blockStyle.fontId : fontId;
   if (verticalMode) {
     currentTextBlock->layoutVerticalColumns(
         renderer, layoutFontId, viewportHeight,

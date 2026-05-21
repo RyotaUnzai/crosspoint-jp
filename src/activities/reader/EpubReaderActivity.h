@@ -3,7 +3,11 @@
 #include <Epub/FootnoteEntry.h>
 #include <Epub/Section.h>
 
+#include <atomic>
+#include <memory>
 #include <optional>
+
+#include <Epub/Page.h>
 
 #include "EpubReaderMenuActivity.h"
 #include "activities/Activity.h"
@@ -31,6 +35,17 @@ class EpubReaderActivity final : public Activity {
   bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
   bool automaticPageTurnActive = false;
   bool verticalMode = false;  // resolved effective writing mode for current book
+  bool heavyBookMode = false;
+  bool heavyBookModeKnown = false;
+  bool backgroundCacheRequested = false;
+  bool backgroundCacheRunning = false;
+  TaskHandle_t backgroundCacheTaskHandle = nullptr;
+  std::shared_ptr<std::atomic_bool> backgroundCacheCancelFlag = std::make_shared<std::atomic_bool>(false);
+  std::shared_ptr<std::atomic_bool> backgroundCacheRunningFlag = std::make_shared<std::atomic_bool>(false);
+  std::shared_ptr<std::atomic_int> backgroundCacheProgressPercent = std::make_shared<std::atomic_int>(0);
+  std::unique_ptr<Page> prefetchedNextPage = nullptr;
+  int prefetchedNextPageSpineIndex = -1;
+  int prefetchedNextPageNumber = -1;
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
@@ -56,6 +71,14 @@ class EpubReaderActivity final : public Activity {
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   void pageTurn(bool isForwardTurn);
   void pregenerateCache();
+  void loadHeavyBookMode();
+  void markHeavyBookMode();
+  void clearPrefetchedNextPage();
+  void prefetchNextPageIfHelpful(uint16_t viewportWidth, uint16_t viewportHeight);
+  void startBackgroundCacheGeneration(int startSpineIndex, int endSpineIndex, bool includeImages,
+                                      uint16_t viewportWidth, uint16_t viewportHeight);
+  void cancelBackgroundCacheGeneration();
+  static void backgroundCacheTaskTrampoline(void* param);
 
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);

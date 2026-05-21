@@ -16,14 +16,22 @@ class GfxRenderer;
 class ParsedText {
   std::vector<std::string> words;
   std::vector<EpdFontFamily::Style> wordStyles;
-  std::vector<bool> wordContinues;     // true = word attaches to previous (no space before it)
-  std::vector<std::string> rubyTexts;  // words と並列、ルビなしは空文字列
+  std::vector<bool> wordContinues;  // true = word attaches to previous (no space before it)
+  std::vector<std::string> rubyTexts;
+  std::vector<size_t> rubyWordIndices;
+  std::vector<uint16_t> rubyWidths;
+  std::vector<uint16_t> rubySpans;
   std::vector<VerticalTextUtils::VerticalBehavior> wordVerticalBehaviors;
+  size_t rubyWordCount = 0;
+  size_t sdFontReadyWordCount = 0;
+  uint8_t cachedStyleMask = 0;
   BlockStyle blockStyle;
   bool firstLineIndent;
   bool hyphenationEnabled;
 
   void applyParagraphIndent();
+  uint8_t getStyleMask() const;
+  void prepareRubyMetrics(const GfxRenderer& renderer, int fontId, bool needVerticalSpan);
   std::vector<size_t> computeLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth, int spaceWidth,
                                         std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
                                         std::vector<bool>& wordIsCjkVec);
@@ -53,6 +61,8 @@ class ParsedText {
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
   void setRubyForWordAt(size_t index, const std::string& ruby);
+  const std::vector<std::string>& getRubyTexts() const { return rubyTexts; }
+  size_t getRubyWordCount() const { return rubyWordCount; }
   bool isEmpty() const { return words.empty(); }
   void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>)>& processLine,

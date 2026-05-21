@@ -150,16 +150,16 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
   return &fontData->bitmap[glyph->dataOffset];
 }
 
-void GfxRenderer::ensureSdCardFontReady(int fontId, const char* utf8Text) const {
+void GfxRenderer::ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_t styleMask) const {
   auto it = sdCardFonts_.find(fontId);
   if (it != sdCardFonts_.end()) {
     // Build a compact advance-only table for layout measurement.
     // Unlike prewarm(), this has no codepoint limit — handles CJK paragraphs
     // with 2000+ unique codepoints without overflow thrashing.
     // Uses 6 bytes per codepoint (vs 16 for full EpdGlyph), no bitmap data.
-    int missed = it->second->buildAdvanceTable(utf8Text, 0x0F);
+    int missed = it->second->buildAdvanceTable(utf8Text, styleMask);
     if (missed > 0) {
-      LOG_DBG("GFX", "ensureSdCardFontReady: %d glyph(s) not found", missed);
+      LOG_DBG("GFX", "ensureSdCardFontReady: %d glyph(s) not found (styleMask=0x%02X)", missed, styleMask);
     }
   }
 }
@@ -1512,8 +1512,19 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     int32_t widthFP = 0;
     const uint8_t styleIdx = static_cast<uint8_t>(style);
+    uint16_t cjkFallbackAdvanceFP = 0;
     while (uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text))) {
-      widthFP += sdIt->second->getAdvance(cp, styleIdx);
+      if (utf8IsCombiningMark(cp)) continue;
+      uint16_t advanceFP = sdIt->second->getAdvance(cp, styleIdx);
+      if (advanceFP == 0 && isCjkCodepoint(cp)) {
+        if (cjkFallbackAdvanceFP == 0) {
+          cjkFallbackAdvanceFP = sdIt->second->getAdvance(0x4E00, styleIdx);  // 一
+          if (cjkFallbackAdvanceFP == 0) cjkFallbackAdvanceFP = sdIt->second->getAdvance(0x3042, styleIdx);  // あ
+          if (cjkFallbackAdvanceFP == 0) cjkFallbackAdvanceFP = sdIt->second->getAdvance(0x30A2, styleIdx);  // ア
+        }
+        advanceFP = cjkFallbackAdvanceFP;
+      }
+      widthFP += advanceFP;
     }
     const uint16_t scale = getSdCardFontScale(fontId);
     if (scale != 256) {
@@ -1593,6 +1604,84 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   }
   widthPx += fp4::toPixel(prevAdvanceFP);  // final glyph's advance
   return widthPx;
+}
+
+int GfxRenderer::measureTextVerticalSpan(const int fontId, const char* text, EpdFontFamily::Style style) const {
+  if (text == nullptr || *text == '\0') return 0;
+
+  if (isReaderFont(fontId)) {
+    FontManager& fm = FontManager::getInstance();
+    if (fm.isExternalFontEnabled()) {
+      ExternalFont* extFont = fm.getActiveFont();
+      if (extFont) {
+        return extFont->getCharHeight();
+      }
+    }
+  }
+
+  const int effectiveFontId = getEffectiveFontId(fontId);
+  const auto fontIt = fontMap.find(effectiveFontId);
+  if (fontIt == fontMap.end()) {
+    if (isUiFont(fontId)) {
+      return CjkUiFont20::CJK_UI_FONT_HEIGHT;
+    }
+    LOG_ERR("GFX", "Font %d not found", effectiveFontId);
+    return 0;
+  }
+
+  const auto& font = fontIt->second;
+  const EpdFontData* fontData = font.getData(style);
+  if (!fontData) {
+    return 0;
+  }
+
+  SdCardFont* sdFont = nullptr;
+  auto sdIt = sdCardFonts_.find(effectiveFontId);
+  if (sdIt != sdCardFonts_.end()) {
+    sdFont = sdIt->second;
+    if (sdFont && sdFont->hasVertData()) {
+      sdFont->loadVertData(static_cast<uint8_t>(style));
+    }
+  }
+
+  const uint16_t scale = getSdCardFontScale(effectiveFontId);
+  const uint8_t styleIdx = static_cast<uint8_t>(style);
+  int maxSpan = 0;
+  const char* ptr = text;
+
+  while (uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&ptr))) {
+    if (utf8IsCombiningMark(cp)) continue;
+
+    int span = 0;
+    if (sdFont && sdFont->hasVertData() && VerticalTextUtils::shouldUseVertGlyph(cp)) {
+      const EpdGlyph* vertGlyph = sdFont->getVertGlyph(cp, styleIdx);
+      if (vertGlyph) {
+        span = vertGlyph->height;
+      }
+    }
+    if (span <= 0) {
+      const EpdGlyph* glyph = font.getGlyph(cp, style);
+      if (glyph) {
+        span = glyph->height;
+      }
+    }
+    if (span <= 0 && isCjkCodepoint(cp)) {
+      span = fontData->advanceY;
+    }
+    if (span <= 0) {
+      span = fontData->ascender;
+    }
+    if (scale != 256) {
+      span = (span * scale + 128) >> 8;
+    }
+
+    maxSpan = std::max(maxSpan, span);
+  }
+
+  if (maxSpan <= 0) {
+    maxSpan = getLineHeight(fontId);
+  }
+  return maxSpan;
 }
 
 int GfxRenderer::getFontAscenderSize(const int fontId) const {
@@ -1709,7 +1798,11 @@ void GfxRenderer::drawTextVertical(const int fontId, const int x, const int y, c
     int32_t advFP = static_cast<int32_t>(glyph->advanceX);
     const uint16_t fontScale = getSdCardFontScale(effectiveFontId);
     if (fontScale != 256) advFP = static_cast<int32_t>(static_cast<int64_t>(advFP) * fontScale / 256);
-    const int advance = fp4::toPixel(advFP);
+    int advance = fp4::toPixel(advFP);
+    if (advance <= 0 && isCjkCodepoint(cp)) {
+      advance = font.getData(style)->advanceY;
+      if (advance <= 0) advance = font.getData(style)->ascender;
+    }
     const int verticalAdvance = advance + advance * verticalCharSpacingPercent_ / 100;
 
     // Check for vertical substitute glyph (OpenType 'vert' feature).

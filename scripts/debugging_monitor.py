@@ -34,6 +34,7 @@ import sys
 import threading
 from collections import deque
 from datetime import datetime
+from pathlib import Path
 
 # Try to import potentially missing packages
 PACKAGE_MAPPING: dict[str, str] = {
@@ -83,6 +84,14 @@ data_lock: threading.Lock = threading.Lock()  # Prevent reading while writing
 
 # Global shutdown flag
 shutdown_event = threading.Event()
+capture_screenshot_event = threading.Event()
+boot_ready_event = threading.Event()
+
+# Known framebuffer sizes for common XTEINK panels.
+KNOWN_SCREENSHOT_GEOMETRIES: dict[int, tuple[int, int]] = {
+    48000: (800, 480),
+    52272: (792, 528),
+}
 
 # Initialize colors
 init(autoreset=True)
@@ -195,6 +204,73 @@ def parse_memory_line(line: str) -> tuple[int | None, int | None, int | None]:
     )
 
 
+def rotate_image_if_needed(img, rotation: int):
+    """Rotate a Pillow image by a multiple of 90 degrees when requested."""
+    if rotation == 0:
+        return img
+    if rotation == 90:
+        return img.transpose(Image.ROTATE_90)
+    if rotation == 180:
+        return img.transpose(Image.ROTATE_180)
+    if rotation == 270:
+        return img.transpose(Image.ROTATE_270)
+    raise ValueError("Rotation must be one of: 0, 90, 180, 270")
+
+
+def infer_screenshot_geometry(
+    screenshot_size: int,
+    forced_width: int | None,
+    forced_height: int | None,
+) -> tuple[int, int] | None:
+    """
+    Infer the screenshot framebuffer geometry from the byte size.
+
+    If the user passes explicit dimensions, use those. Otherwise fall back to the
+    known XTEINK sizes exposed by the firmware. This keeps the monitor usable across
+    X3/X4 variants without hardcoding a single panel size.
+    """
+    if forced_width and forced_height:
+        if (forced_width * forced_height) // 8 == screenshot_size:
+            return forced_width, forced_height
+        return None
+
+    return KNOWN_SCREENSHOT_GEOMETRIES.get(screenshot_size)
+
+
+def save_screenshot(
+    screenshot_data: bytes,
+    screenshot_size: int,
+    forced_width: int | None,
+    forced_height: int | None,
+    rotation: int,
+    output_dir: Path,
+) -> str | None:
+    """
+    Decode a raw framebuffer into a bitmap file.
+
+    Returns the saved filename on success, or None when geometry could not be
+    established.
+    """
+    if not Image:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        raw_path = output_dir / f"screenshot-{datetime.now().strftime('%Y%m%d-%H%M%S')}.raw"
+        with open(raw_path, "wb") as f:
+            f.write(screenshot_data)
+        return str(raw_path)
+
+    geometry = infer_screenshot_geometry(screenshot_size, forced_width, forced_height)
+    if geometry is None:
+        return None
+
+    width, height = geometry
+    img = Image.frombytes("1", (width, height), screenshot_data)
+    img = rotate_image_if_needed(img, rotation)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    bmp_path = output_dir / f"screenshot-{datetime.now().strftime('%Y%m%d-%H%M%S')}.bmp"
+    img.save(bmp_path)
+    return str(bmp_path)
+
+
 def serial_worker(ser, kwargs: dict[str, str]) -> None:
     """
     Runs in a background thread. Handles reading serial data, printing to console,
@@ -222,6 +298,13 @@ def serial_worker(ser, kwargs: dict[str, str]) -> None:
     expecting_screenshot = False
     screenshot_size = 0
     screenshot_data = b""
+    detected_device: str | None = None
+    forced_width = kwargs.get("screenshot_width")
+    forced_height = kwargs.get("screenshot_height")
+    screenshot_rotation = int(kwargs.get("screenshot_rotate", 270))
+    output_dir = Path(kwargs.get("screenshot_output_dir", "Screenshots"))
+    forced_width_int = int(forced_width) if forced_width else None
+    forced_height_int = int(forced_height) if forced_height else None
 
     try:
         while not shutdown_event.is_set():
@@ -231,20 +314,28 @@ def serial_worker(ser, kwargs: dict[str, str]) -> None:
                     continue
                 screenshot_data += data
                 if len(screenshot_data) == screenshot_size:
-                    if Image:
-                        img = Image.frombytes("1", (800, 480), screenshot_data)
-                        # We need to rotate the image because the raw data is in landscape mode
-                        img = img.transpose(Image.ROTATE_270)
-                        img.save("screenshot.bmp")
+                    saved_file = save_screenshot(
+                        screenshot_data,
+                        screenshot_size,
+                        forced_width_int,
+                        forced_height_int,
+                        screenshot_rotation,
+                        output_dir,
+                    )
+                    if saved_file:
                         print(
-                            f"{Fore.GREEN}Screenshot saved to screenshot.bmp{Style.RESET_ALL}"
+                            f"{Fore.GREEN}Screenshot saved to {saved_file}{Style.RESET_ALL}"
                         )
                     else:
-                        with open("screenshot.raw", "wb") as f:
-                            f.write(screenshot_data)
-                        print(
-                            f"{Fore.GREEN}Screenshot saved to screenshot.raw (PIL not available){Style.RESET_ALL}"
+                        expected = ", ".join(
+                            f"{w}x{h}" for w, h in KNOWN_SCREENSHOT_GEOMETRIES.values()
                         )
+                        print(
+                            f"{Fore.RED}Screenshot size {screenshot_size} bytes did not match a known framebuffer geometry. "
+                            f"Expected one of: {expected}. Use --screenshot-width/--screenshot-height to override.{Style.RESET_ALL}"
+                        )
+                    if kwargs.get("capture_screenshot"):
+                        capture_screenshot_event.set()
                     expecting_screenshot = False
                     screenshot_data = b""
             else:
@@ -258,8 +349,22 @@ def serial_worker(ser, kwargs: dict[str, str]) -> None:
                     if not clean_line:
                         continue
 
+                    if "Hardware detect: X3" in clean_line:
+                        detected_device = "X3"
+                        boot_ready_event.set()
+                    elif "Hardware detect: X4" in clean_line:
+                        detected_device = "X4"
+                        boot_ready_event.set()
+                    elif "Starting CrossPoint version" in clean_line:
+                        boot_ready_event.set()
+
                     if clean_line.startswith("SCREENSHOT_START:"):
                         screenshot_size = int(clean_line.split(":")[1])
+                        if detected_device == "X3" and screenshot_size not in KNOWN_SCREENSHOT_GEOMETRIES:
+                            print(
+                                f"{Fore.YELLOW}Detected X3, but screenshot size is {screenshot_size} bytes. "
+                                "The firmware may be reporting a non-X3 framebuffer layout.{Style.RESET_ALL}"
+                            )
                         expecting_screenshot = True
                         continue
                     elif clean_line == "SCREENSHOT_END":
@@ -310,6 +415,11 @@ def input_worker(ser) -> None:
             ser.write(f"CMD:{cmd}\n".encode())
         except (EOFError, KeyboardInterrupt):
             break
+
+
+def send_command(ser, cmd: str) -> None:
+    """Send a command line to the device using the monitor's serial protocol."""
+    ser.write(f"CMD:{cmd}\n".encode())
 
 
 def update_graph(frame) -> list:  # pylint: disable=unused-argument
@@ -429,7 +539,50 @@ def main() -> None:
         default="",
         help="Suppress lines containing this keyword (case-insensitive)",
     )
+    parser.add_argument(
+        "--screenshot-width",
+        type=int,
+        default=None,
+        help="Override screenshot framebuffer width in pixels",
+    )
+    parser.add_argument(
+        "--screenshot-height",
+        type=int,
+        default=None,
+        help="Override screenshot framebuffer height in pixels",
+    )
+    parser.add_argument(
+        "--screenshot-rotate",
+        type=int,
+        default=90,
+        choices=[0, 90, 180, 270],
+        help="Rotate saved screenshots clockwise in 90-degree steps (default: 90)",
+    )
+    parser.add_argument(
+        "--capture-screenshot",
+        action="store_true",
+        help="Send SCREENSHOT automatically, wait for the reply, save it, then exit",
+    )
+    parser.add_argument(
+        "--capture-screenshot-delay",
+        type=int,
+        default=0,
+        help="Seconds to wait before sending SCREENSHOT when capture mode is enabled",
+    )
+    parser.add_argument(
+        "--capture-screenshot-skip-boot-wait",
+        action="store_true",
+        help="Send SCREENSHOT after the delay without waiting for boot completion",
+    )
+    parser.add_argument(
+        "--screenshot-output-dir",
+        type=str,
+        default=None,
+        help="Directory where captured screenshots are saved (default: Screenshots)",
+    )
     args = parser.parse_args()
+    if args.screenshot_output_dir is None:
+        args.screenshot_output_dir = str(Path(__file__).resolve().parents[1] / "Screenshots")
     port = args.port
     if port is None:
         port_list = get_auto_detected_port()
@@ -461,8 +614,37 @@ def main() -> None:
     # 1. Start the Serial Reader in a separate thread
     # Daemon=True means this thread dies when the main program closes
     myargs = vars(args)  # Convert Namespace to dict for easier passing
+    myargs["screenshot_output_dir"] = args.screenshot_output_dir
     t = threading.Thread(target=serial_worker, args=(ser, myargs), daemon=True)
     t.start()
+
+    if args.capture_screenshot:
+        if args.capture_screenshot_delay > 0:
+            print(
+                f"{Fore.YELLOW}Waiting {args.capture_screenshot_delay} seconds before sending SCREENSHOT...{Style.RESET_ALL}"
+            )
+            if shutdown_event.wait(timeout=args.capture_screenshot_delay):
+                return
+        elif not args.capture_screenshot_skip_boot_wait:
+            print(
+                f"{Fore.YELLOW}Waiting for device boot completion before sending SCREENSHOT...{Style.RESET_ALL}"
+            )
+            if not boot_ready_event.wait(timeout=30):
+                print(
+                    f"{Fore.RED}Timed out waiting for boot completion. The device may be stuck before the command handler starts.{Style.RESET_ALL}"
+                )
+                shutdown_event.set()
+                return
+        print(f"{Fore.YELLOW}Sending SCREENSHOT command...{Style.RESET_ALL}")
+        ser.write(b"CMD:SCREENSHOT\n")
+        if capture_screenshot_event.wait(timeout=20):
+            shutdown_event.set()
+            return
+        print(
+            f"{Fore.RED}Timed out waiting for screenshot data. The device may not have accepted the command.{Style.RESET_ALL}"
+        )
+        shutdown_event.set()
+        return
 
     # Start input thread
     input_thread = threading.Thread(target=input_worker, args=(ser,), daemon=True)
@@ -490,6 +672,21 @@ def main() -> None:
         pass
 
     fig = plt.figure(figsize=(10, 6))
+
+    def on_key_press(event):  # pylint: disable=unused-argument
+        """Keyboard shortcuts while the graph window has focus."""
+        if event.key == "s":
+            print(f"{Fore.YELLOW}Hotkey: sending SCREENSHOT{Style.RESET_ALL}")
+            send_command(ser, "SCREENSHOT")
+        elif event.key == "q":
+            print(f"{Fore.YELLOW}Hotkey: quitting monitor{Style.RESET_ALL}")
+            shutdown_event.set()
+            plt.close("all")
+
+    fig.canvas.mpl_connect("key_press_event", on_key_press)
+    print(
+        f"{Fore.CYAN}Hotkeys: press 's' in the Figure window to request a screenshot, 'q' to quit.{Style.RESET_ALL}"
+    )
 
     # Update graph every 1000ms
     _ = animation.FuncAnimation(

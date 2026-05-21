@@ -19,6 +19,7 @@
 #include <esp_task_wdt.h>
 #include <sys/time.h>
 
+#include <algorithm>
 #include <cstring>
 #include <ctime>
 
@@ -318,12 +319,12 @@ void setup() {
   halTiltSensor.begin();
 
 #ifdef ENABLE_SERIAL_LOG
-  if (gpio.isUsbConnected()) {
-    Serial.begin(115200);
-    const unsigned long start = millis();
-    while (!Serial && (millis() - start) < 500) {
-      delay(10);
-    }
+  Serial.begin(115200);
+  logSerial.setTxBufferSize(4096);
+  logSerial.setTxTimeoutMs(5000);
+  const unsigned long start = millis();
+  while (!Serial && (millis() - start) < 500) {
+    delay(10);
   }
 #endif
 
@@ -484,7 +485,18 @@ void loop() {
         const uint32_t bufferSize = display.getBufferSize();
         logSerial.printf("SCREENSHOT_START:%d\n", bufferSize);
         uint8_t* buf = display.getFrameBuffer();
-        logSerial.write(buf, bufferSize);
+        uint32_t offset = 0;
+        while (offset < bufferSize) {
+          const size_t chunkSize = std::min<uint32_t>(64, bufferSize - offset);
+          const size_t written = logSerial.write(buf + offset, chunkSize);
+          if (written == 0) {
+            delay(2);
+            continue;
+          }
+          offset += written;
+          logSerial.flush();
+          delay(2);
+        }
         logSerial.printf("SCREENSHOT_END\n");
       }
     }

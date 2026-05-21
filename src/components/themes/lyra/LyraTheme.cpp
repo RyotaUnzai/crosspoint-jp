@@ -632,6 +632,38 @@ Rect LyraTheme::drawPopup(const GfxRenderer& renderer, const char* message) cons
   return Rect{x, y, w, h};
 }
 
+Rect LyraTheme::drawPopup(const GfxRenderer& renderer, const char* message, const char* detail) const {
+  if (!detail || detail[0] == '\0') {
+    return drawPopup(renderer, message);
+  }
+
+  constexpr int y = 132;
+  constexpr int outline = 2;
+  const int messageWidth = renderer.getTextWidth(UI_12_FONT_ID, message, EpdFontFamily::REGULAR);
+  const int detailWidth = renderer.getTextWidth(SMALL_FONT_ID, detail);
+  const int textWidth = std::max(messageWidth, detailWidth);
+  const int messageHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  const int detailHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  const int w = textWidth + popupMarginX * 2;
+  const int h = messageHeight + detailHeight + popupMarginY * 2;
+  const int x = (renderer.getScreenWidth() - w) / 2;
+
+  renderer.fillRoundedRect(x - outline, y - outline, w + outline * 2, h + outline * 2, cornerRadius + outline,
+                           Color::White);
+  renderer.fillRoundedRect(x, y, w, h, cornerRadius, Color::Black);
+
+  const int messageX = x + (w - messageWidth) / 2;
+  const int messageY = y + popupMarginY - 2;
+  renderer.drawText(UI_12_FONT_ID, messageX, messageY, message, false, EpdFontFamily::REGULAR);
+
+  const int detailX = x + (w - detailWidth) / 2;
+  const int detailY = messageY + messageHeight - 2;
+  renderer.drawText(SMALL_FONT_ID, detailX, detailY, detail, false);
+  renderer.displayBuffer();
+
+  return Rect{x, y, w, h};
+}
+
 void LyraTheme::fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const {
   constexpr int barHeight = 4;
 

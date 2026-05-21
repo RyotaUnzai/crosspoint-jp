@@ -680,6 +680,36 @@ Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message) cons
   return Rect{x, y, w, h};
 }
 
+Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message, const char* detail) const {
+  if (!detail || detail[0] == '\0') {
+    return drawPopup(renderer, message);
+  }
+
+  constexpr int margin = 15;
+  const int y = static_cast<int>(renderer.getScreenHeight() * 0.075f);
+  const int messageWidth = renderer.getTextWidth(UI_12_FONT_ID, message, EpdFontFamily::BOLD);
+  const int detailWidth = renderer.getTextWidth(SMALL_FONT_ID, detail);
+  const int textWidth = std::max(messageWidth, detailWidth);
+  const int messageHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  const int detailHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  const int h = messageHeight + detailHeight + margin * 2;
+  const int w = textWidth + margin * 2;
+  const int x = (renderer.getScreenWidth() - w) / 2;
+
+  renderer.fillRect(x - 2, y - 2, w + 4, h + 4, true);
+  renderer.fillRect(x, y, w, h, false);
+
+  const int messageX = x + (w - messageWidth) / 2;
+  const int messageY = y + margin - 2;
+  renderer.drawText(UI_12_FONT_ID, messageX, messageY, message, true, EpdFontFamily::BOLD);
+
+  const int detailX = x + (w - detailWidth) / 2;
+  const int detailY = messageY + messageHeight - 2;
+  renderer.drawText(SMALL_FONT_ID, detailX, detailY, detail, true);
+  renderer.displayBuffer();
+  return Rect{x, y, w, h};
+}
+
 void BaseTheme::fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const {
   constexpr int barHeight = 4;
   const int barWidth = layout.width - 30;  // twice the margin in drawPopup to match text width
@@ -768,7 +798,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
 
     const int batterySize = SETTINGS.statusBarBattery ? (showBatteryPercentage ? 50 : 20) : 0;
     const int titleMarginLeft = batterySize + 30;
-    const int titleMarginRight = progressTextWidth + 30;
+    const int titleMarginRight = progressTextWidth + 30 + (rtlProgress ? 16 : 0);
 
     // Attempt to center title on the screen, but if title is too wide then later we will center it within the
     // available space.

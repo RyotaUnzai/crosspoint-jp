@@ -11,6 +11,10 @@ namespace ReaderUtils {
 
 constexpr unsigned long GO_HOME_MS = 1000;
 
+inline int getRefreshCyclePages() {
+  return std::max(SETTINGS.getRefreshFrequency(), 30);
+}
+
 inline void applyOrientation(GfxRenderer& renderer, const uint8_t orientation) {
   switch (orientation) {
     case CrossPointSettings::ORIENTATION::PORTRAIT:
@@ -56,7 +60,7 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
 inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
   if (pagesUntilFullRefresh <= 1) {
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-    pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+    pagesUntilFullRefresh = getRefreshCyclePages();
   } else {
     renderer.displayBuffer();
     pagesUntilFullRefresh--;

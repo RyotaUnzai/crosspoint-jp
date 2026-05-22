@@ -74,6 +74,8 @@ class EpubReaderActivity final : public Activity {
   void loadHeavyBookMode();
   void markHeavyBookMode();
   void clearPrefetchedNextPage();
+  void resetTransientReaderState(bool cancelBackgroundCache = false);
+  std::unique_ptr<Page> loadPageForRender();
   void prefetchNextPageIfHelpful(uint16_t viewportWidth, uint16_t viewportHeight);
   void startBackgroundCacheGeneration(int startSpineIndex, int endSpineIndex, bool includeImages,
                                       uint16_t viewportWidth, uint16_t viewportHeight);

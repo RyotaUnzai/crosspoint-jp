@@ -178,6 +178,29 @@ void EpubReaderActivity::clearPrefetchedNextPage() {
   prefetchedNextPageNumber = -1;
 }
 
+void EpubReaderActivity::resetTransientReaderState(const bool cancelBackgroundCache) {
+  if (cancelBackgroundCache) {
+    cancelBackgroundCacheGeneration();
+  }
+  clearPrefetchedNextPage();
+}
+
+std::unique_ptr<Page> EpubReaderActivity::loadPageForRender() {
+  if (!section) {
+    return nullptr;
+  }
+
+  if (prefetchedNextPage && prefetchedNextPageSpineIndex == currentSpineIndex &&
+      prefetchedNextPageNumber == section->currentPage) {
+    auto page = std::move(prefetchedNextPage);
+    clearPrefetchedNextPage();
+    LOG_DBG("ERS", "Using prefetched page %d for spine %d", section->currentPage, currentSpineIndex);
+    return page;
+  }
+
+  return section->loadPageFromSectionFile();
+}
+
 void EpubReaderActivity::prefetchNextPageIfHelpful(const uint16_t viewportWidth, const uint16_t viewportHeight) {
   if (!epub || !section) {
     return;
@@ -485,6 +508,7 @@ void EpubReaderActivity::onEnter() {
 
   epub->setupCacheDir();
   loadHeavyBookMode();
+  pagesUntilFullRefresh = ReaderUtils::getRefreshCyclePages();
 
   FsFile f;
   if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
@@ -761,7 +785,7 @@ void EpubReaderActivity::jumpToPercent(int percent) {
     currentSpineIndex = targetSpineIndex;
     nextPageNumber = 0;
     pendingPercentJump = true;
-    clearPrefetchedNextPage();
+    resetTransientReaderState(true);
     section.reset();
   }
 }
@@ -773,7 +797,7 @@ void EpubReaderActivity::invalidateSectionPreservingPosition() {
     cachedChapterTotalPageCount = section->pageCount;
     nextPageNumber = section->currentPage;
   }
-  clearPrefetchedNextPage();
+  resetTransientReaderState(false);
   section.reset();
 }
 
@@ -789,7 +813,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               RenderLock lock(*this);
               currentSpineIndex = std::get<ChapterResult>(result.data).spineIndex;
               nextPageNumber = 0;
-              clearPrefetchedNextPage();
+              resetTransientReaderState(true);
               section.reset();
             }
           });
@@ -939,7 +963,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                   RenderLock lock(*this);
                   currentSpineIndex = sync.spineIndex;
                   nextPageNumber = sync.page;
-                  clearPrefetchedNextPage();
+                  resetTransientReaderState(true);
                   section.reset();
                 }
               }
@@ -1001,7 +1025,7 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption
       cachedChapterTotalPageCount = section->pageCount;
       nextPageNumber = section->currentPage;
     }
-    clearPrefetchedNextPage();
+    resetTransientReaderState(false);
     section.reset();
   }
 }
@@ -1016,7 +1040,7 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
         RenderLock lock(*this);
         nextPageNumber = 0;
         currentSpineIndex++;
-        clearPrefetchedNextPage();
+        resetTransientReaderState(true);
         section.reset();
       }
     }
@@ -1029,7 +1053,7 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
         RenderLock lock(*this);
         nextPageNumber = UINT16_MAX;
         currentSpineIndex--;
-        clearPrefetchedNextPage();
+        resetTransientReaderState(true);
         section.reset();
       }
     }
@@ -1245,20 +1269,12 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   }
 
   {
-    std::unique_ptr<Page> p;
-    if (prefetchedNextPage && prefetchedNextPageSpineIndex == currentSpineIndex &&
-        prefetchedNextPageNumber == section->currentPage) {
-      p = std::move(prefetchedNextPage);
-      clearPrefetchedNextPage();
-      LOG_DBG("ERS", "Using prefetched page %d for spine %d", section->currentPage, currentSpineIndex);
-    } else {
-      p = section->loadPageFromSectionFile();
-    }
+    std::unique_ptr<Page> p = loadPageForRender();
     if (!p) {
       LOG_ERR("ERS", "Failed to load page from SD - clearing section cache");
       section->clearCache();
       section.reset();
-      clearPrefetchedNextPage();
+      resetTransientReaderState(false);
       requestUpdate();  // Try again after clearing cache
                         // TODO: prevent infinite loop if the page keeps failing to load for some reason
       automaticPageTurnActive = false;
@@ -1294,7 +1310,6 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportWidth, const uint16_t viewportHeight) {
   (void)viewportWidth;
   (void)viewportHeight;
-  return;
 
   if (!epub || !section || section->pageCount < 2) {
     return;
@@ -1304,8 +1319,9 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     return;
   }
 
-  // Build the next chapter cache while the penultimate page is on screen.
-  if (section->currentPage != section->pageCount - 2) {
+  // Build the next chapter cache a little earlier than the very end.
+  // This gives the background job a head start without being too aggressive.
+  if (section->currentPage < section->pageCount - 3) {
     return;
   }
 
@@ -1324,8 +1340,12 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     return;
   }
 
-  LOG_DBG("ERS", "Queueing background indexing for next chapter: %d", nextSpineIndex);
-  startBackgroundCacheGeneration(nextSpineIndex, nextSpineIndex + 1, true, viewportWidth, viewportHeight);
+  // NOTE:
+  // The concurrent background cache task is currently too risky on some books
+  // and can trigger a device abort while the reader is active. Keep the
+  // lightweight page prefetch path, but do not start the next-chapter task
+  // until the background worker is reworked to be fully safe.
+  LOG_DBG("ERS", "Skipping background indexing for next chapter %d to keep reading stable", nextSpineIndex);
 }
 
 void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount, bool isFinished) {
@@ -1382,6 +1402,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
   // Force special handling for pages with images when anti-aliasing is on
   bool imagePageWithAA = page->hasImages() && SETTINGS.getDirectionSettings(verticalMode).textAntiAliasing;
+  // Tiny chapters (1-2 pages) already feel "end-like" and do not benefit much from
+  // a slow refresh, so keep the heavy refresh reserved for real multi-page chapters.
+  const bool nearChapterEnd = section->pageCount >= 3 && (section->currentPage + 2 >= section->pageCount);
 
   page->render(renderer, SETTINGS.getReaderFontId(verticalMode), orientedMarginLeft, orientedMarginTop, viewportWidth);
   renderStatusBar();
@@ -1404,11 +1427,12 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
                    viewportWidth);
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     } else {
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      renderer.displayBuffer(nearChapterEnd ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
     }
-    // Double FAST_REFRESH handles ghosting for image pages; don't count toward full refresh cadence
+    // Double FAST_REFRESH handles ghosting for image pages; keep the slower refresh
+    // for chapter boundaries only so the body stays responsive.
   } else {
-    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+    renderer.displayBuffer(nearChapterEnd ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
   }
   const auto tDisplay = millis();
 
@@ -1534,7 +1558,7 @@ void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool s
   {
     RenderLock lock(*this);
     cancelBackgroundCacheGeneration();
-    clearPrefetchedNextPage();
+    resetTransientReaderState(false);
     pendingAnchor = std::move(anchor);
     currentSpineIndex = targetSpineIndex;
     nextPageNumber = 0;
@@ -1553,7 +1577,7 @@ void EpubReaderActivity::restoreSavedPosition() {
   {
     RenderLock lock(*this);
     cancelBackgroundCacheGeneration();
-    clearPrefetchedNextPage();
+    resetTransientReaderState(false);
     currentSpineIndex = pos.spineIndex;
     nextPageNumber = pos.pageNumber;
     section.reset();

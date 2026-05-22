@@ -1375,6 +1375,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   page->render(renderer, SETTINGS.getReaderFontId(verticalMode), orientedMarginLeft, orientedMarginTop,
                viewportWidth);  // scan pass
   scope.endScanAndPrewarm();
+  if (fcm) {
+    fcm->logStats("epub-prewarm");
+  }
   const auto tPrewarm = millis();
 
   // Force special handling for pages with images when anti-aliasing is on

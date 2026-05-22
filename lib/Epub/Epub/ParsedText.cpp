@@ -238,7 +238,7 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   // Skip when textIndent is explicitly negative (hanging indent for <li> bullets).
   if (firstLineIndent && blockStyle.textIndent == 0 && !blockStyle.textIndentDefined &&
       (blockStyle.alignment == CssTextAlign::Justify || blockStyle.alignment == CssTextAlign::Left)) {
-    const int cjkCharWidth = renderer.getTextWidth(fontId, "\xe5\xad\x97", EpdFontFamily::REGULAR);
+    const int cjkCharWidth = renderer.getTextAdvanceX(fontId, "\xe5\xad\x97", EpdFontFamily::REGULAR);
     blockStyle.textIndent = static_cast<int16_t>(cjkCharWidth > 0 ? cjkCharWidth : spaceWidth * 3);
   }
 

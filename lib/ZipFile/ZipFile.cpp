@@ -17,6 +17,18 @@ struct ZipInflateCtx {
 namespace {
 constexpr uint16_t ZIP_METHOD_STORED = 0;
 constexpr uint16_t ZIP_METHOD_DEFLATED = 8;
+constexpr size_t MAX_ONE_SHOT_STREAM_INFLATED_SIZE = 16 * 1024;
+
+const char* zipMethodName(const uint16_t method) {
+  switch (method) {
+    case ZIP_METHOD_STORED:
+      return "stored";
+    case ZIP_METHOD_DEFLATED:
+      return "deflated";
+    default:
+      return "unsupported";
+  }
+}
 
 // RAII zip: opens the zip if not already open, closes on destruction only if
 // it performed the open.  Removes the wasOpen/close boilerplate from every method.
@@ -454,12 +466,16 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
   file.seek(fileOffset);
   const auto deflatedDataSize = fileStat.compressedSize;
   const auto inflatedDataSize = fileStat.uncompressedSize;
+  LOG_DBG("ZIP", "Streaming %s (method=%s, chunk=%zu, compressed=%lu, uncompressed=%lu)", filename,
+          zipMethodName(fileStat.method), chunkSize, static_cast<unsigned long>(deflatedDataSize),
+          static_cast<unsigned long>(inflatedDataSize));
 
   if (fileStat.method == ZIP_METHOD_STORED) {
     // no deflation, just read content
     const auto buffer = static_cast<uint8_t*>(malloc(chunkSize));
     if (!buffer) {
-      LOG_ERR("ZIP", "Failed to allocate memory for buffer");
+      LOG_ERR("ZIP", "Failed to allocate memory for buffer (heap free=%u, maxAlloc=%u)", ESP.getFreeHeap(),
+              ESP.getMaxAllocHeap());
       return false;
     }
 
@@ -473,7 +489,8 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
       }
 
       if (out.write(buffer, dataRead) != dataRead) {
-        LOG_ERR("ZIP", "Failed to write all output bytes to stream");
+        LOG_ERR("ZIP", "Failed to write all output bytes to stream (heap free=%u, maxAlloc=%u)", ESP.getFreeHeap(),
+                ESP.getMaxAllocHeap());
         free(buffer);
         return false;
       }
@@ -485,15 +502,75 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
   }
 
   if (fileStat.method == ZIP_METHOD_DEFLATED) {
+    if (inflatedDataSize == 0) {
+      return true;
+    }
+
+    if (inflatedDataSize <= MAX_ONE_SHOT_STREAM_INFLATED_SIZE) {
+      auto* deflatedData = static_cast<uint8_t*>(malloc(deflatedDataSize));
+      if (!deflatedData) {
+        LOG_ERR("ZIP", "Failed to allocate small deflated buffer (%lu bytes, heap free=%u, maxAlloc=%u)",
+                static_cast<unsigned long>(deflatedDataSize), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+        return false;
+      }
+
+      const size_t dataRead = file.read(deflatedData, deflatedDataSize);
+      if (dataRead != deflatedDataSize) {
+        LOG_ERR("ZIP", "Failed to read small deflated data, expected %lu got %zu",
+                static_cast<unsigned long>(deflatedDataSize), dataRead);
+        free(deflatedData);
+        return false;
+      }
+
+      auto* inflatedData = static_cast<uint8_t*>(malloc(inflatedDataSize));
+      if (!inflatedData) {
+        LOG_ERR("ZIP", "Failed to allocate small inflated buffer (%lu bytes, heap free=%u, maxAlloc=%u)",
+                static_cast<unsigned long>(inflatedDataSize), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+        free(deflatedData);
+        return false;
+      }
+
+      bool success = false;
+      {
+        InflateReader reader;
+        success = reader.init(false);
+        if (success) {
+          reader.setSource(deflatedData, deflatedDataSize);
+          success = reader.read(inflatedData, inflatedDataSize);
+        }
+      }
+      free(deflatedData);
+
+      if (!success) {
+        LOG_ERR("ZIP", "Failed to inflate small deflated stream (%s)", filename);
+        free(inflatedData);
+        return false;
+      }
+
+      if (out.write(inflatedData, inflatedDataSize) != inflatedDataSize) {
+        LOG_ERR("ZIP", "Failed to write small inflated stream (heap free=%u, maxAlloc=%u)", ESP.getFreeHeap(),
+                ESP.getMaxAllocHeap());
+        free(inflatedData);
+        return false;
+      }
+
+      LOG_DBG("ZIP", "One-shot streamed %s (%lu -> %lu bytes)", filename,
+              static_cast<unsigned long>(deflatedDataSize), static_cast<unsigned long>(inflatedDataSize));
+      free(inflatedData);
+      return true;
+    }
+
     auto* fileReadBuffer = static_cast<uint8_t*>(malloc(chunkSize));
     if (!fileReadBuffer) {
-      LOG_ERR("ZIP", "Failed to allocate memory for zip file read buffer");
+      LOG_ERR("ZIP", "Failed to allocate memory for zip file read buffer (heap free=%u, maxAlloc=%u)",
+              ESP.getFreeHeap(), ESP.getMaxAllocHeap());
       return false;
     }
 
     auto* outputBuffer = static_cast<uint8_t*>(malloc(chunkSize));
     if (!outputBuffer) {
-      LOG_ERR("ZIP", "Failed to allocate memory for output buffer");
+      LOG_ERR("ZIP", "Failed to allocate memory for output buffer (heap free=%u, maxAlloc=%u)", ESP.getFreeHeap(),
+              ESP.getMaxAllocHeap());
       free(fileReadBuffer);
       return false;
     }
@@ -505,7 +582,8 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
     ctx.readBufSize = chunkSize;
 
     if (!ctx.reader.init(true)) {
-      LOG_ERR("ZIP", "Failed to init inflate reader");
+      LOG_ERR("ZIP", "Failed to init inflate reader (heap free=%u, maxAlloc=%u)", ESP.getFreeHeap(),
+              ESP.getMaxAllocHeap());
       free(outputBuffer);
       free(fileReadBuffer);
       return false;
@@ -528,7 +606,8 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
 
       if (produced > 0) {
         if (out.write(outputBuffer, produced) != produced) {
-          LOG_ERR("ZIP", "Failed to write all output bytes to stream");
+          LOG_ERR("ZIP", "Failed to write all output bytes to stream (heap free=%u, maxAlloc=%u)",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
           break;
         }
       }
@@ -556,6 +635,6 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
     return success;  // ctx.reader destructor frees the ring buffer
   }
 
-  LOG_ERR("ZIP", "Unsupported compression method");
+  LOG_ERR("ZIP", "Unsupported compression method %u for %s", fileStat.method, filename);
   return false;
 }

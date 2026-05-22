@@ -1,8 +1,8 @@
 # CrossPoint JP
 
-Xteink X3/X4 向けの日本語EPUB閲覧に特化したフォーク。
+Xteink X3 向けの日本語EPUB閲覧に特化したフォーク。
 
-本家 [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader) (v1.2.0) をベースに、[CJKフォーク](https://github.com/aBER0724/crosspoint-reader-cjk)の改善を統合し、日本語の読書体験を向上させています。
+本家 [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader) (v1.2.0) をベースに、[CJKフォーク](https://github.com/aBER0724/crosspoint-reader-cjk)の改善を統合し、日本語の読書体験を向上させた、[CrossPoint JP](https://github.com/zrn-ns/crosspoint-jp)をベースに縦読みやレイアウトをより最適にしたものです。
 
 <img src="./docs/images/cover.jpg" width="400" alt="縦書き表示"> <img src="./docs/images/home.jpg" width="400" alt="ホーム画面">
 
@@ -10,38 +10,16 @@ Xteink X3/X4 向けの日本語EPUB閲覧に特化したフォーク。
 
 - **動作保証はありません。** 自己責任でご利用ください
 - 現状 **Xteink X3 でのみ動作確認**しています。X4 での動作は未確認です
-- **日本語専用フォークです。** 中国語・韓国語のUIおよびフォントサポートは廃止しています。中国語環境をお使いの方は [CJKフォーク](https://github.com/aBER0724/crosspoint-reader-cjk) をご利用ください
+- **日本語専用です。英語は残していますがその他多言語は削除しています。
 
 ## 主な機能・改善点
 
 ### 日本語の読書体験
 
-- **縦書き表示** — `vertical-rl` 対応、句読点・括弧の自動変換
-- **日本語フォント** — BIZ UDGothic、NotoSansJP 等をデバイスから直接ダウンロード
-- **EPUB内の画像・テーブル** — JPEG/PNG画像やHTMLテーブルを本文中にそのまま表示
-- **縦書き/横書き別設定** — フォント・サイズ・行間等を縦書き・横書きそれぞれで独立して設定可能
-- **文字組みの改善** — 段落インデント、ルビ表示、濁音の表示修正
-
-### 青空文庫
-
-- デバイスからWiFi経由で青空文庫の作品を検索・ダウンロード
-- お気に入り作家を登録して、ホーム画面からすぐにアクセス
-
-### Sleep画面
-
-- お気に入りの画像をスリープ画面に設定（WebUIからアップロード）
-- 当月カレンダーをオーバーレイ表示（配置位置は設定で変更可能、初回のみWiFi接続による時刻同期が必要）
-
-### 操作
-
-- **傾きページ送り** — 端末を左右に傾けてページ送り（IMUセンサー搭載機のみ、設定で有効化）
+- **文字組みの改善** — ルビ表示の重なり
 
 ### その他
-
-- **読書進捗アイコン** — ファイル一覧・最近読んだ本リストで、未読/読書中/読了をアイコンで識別可能（95%以上読了で自動判定）
-- Xteink X3 ハードウェアサポート（4階調グレースケール対応）
-- DS3231 RTCチップによる時刻保持（RTC搭載機のみ）
-- WiFi接続時のNTP時刻自動同期
+- 生成時のプログレスバー改善
 - 各種バグ修正・安定性改善
 
 ## インストール
@@ -104,6 +82,7 @@ Xteink X3/X4 向けの日本語EPUB閲覧に特化したフォーク。
 
 | プロジェクト | 内容 |
 |---|---|
+| [CrossPoint JP](https://github.com/zrn-ns/crosspoint-jp) | 日本語フォーク (v0.1.7 ベース) |
 | [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader) | 本家 (v1.2.0 ベース) |
 | [crosspoint-reader-cjk](https://github.com/aBER0724/crosspoint-reader-cjk) | CJKフォーク（文字間隔修正、段落インデント等） |
 | [PR #1392](https://github.com/crosspoint-reader/crosspoint-reader/pull/1392) | SDカードフォント（22ファミリー、CJK対応） |

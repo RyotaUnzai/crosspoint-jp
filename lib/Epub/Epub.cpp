@@ -358,6 +358,11 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
         parseCssFiles();
         // Invalidate section caches so they are rebuilt with the new CSS
         Storage.removeDir((cachePath + "/sections").c_str());
+      } else {
+        // Section building loads CSS on demand. Keeping the cache resident here
+        // can leave too little heap for Expat and page objects on ESP32-C3.
+        LOG_DBG("EBP", "CSS cache valid (%zu rules), deferring CSS load until section build", cssParser->ruleCount());
+        cssParser->clear();
       }
     }
     LOG_DBG("EBP", "Loaded ePub: %s", filepath.c_str());

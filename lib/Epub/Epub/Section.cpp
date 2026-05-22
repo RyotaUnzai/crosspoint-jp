@@ -12,13 +12,20 @@
 #include "parsers/ChapterHtmlSlimParser.h"
 
 namespace {
-// Version 40: cache layout invalidation after vertical start offset changes.
-constexpr uint8_t SECTION_FILE_VERSION = 40;
+// Version 41: CSS may be skipped under low heap to keep section builds readable.
+constexpr uint8_t SECTION_FILE_VERSION = 41;
 // Minimum free heap required before attempting to build section pages.
 // Section building involves heavy allocations (Page, TextBlock, PageLine, etc.)
 // and on ESP32 without C++ exceptions, allocation failure calls abort().
-// Keep a margin, but not so large that long vertical chapters fail unnecessarily.
-constexpr size_t MIN_FREE_HEAP_FOR_SECTION_BUILD = 48 * 1024;  // 48KB
+// Keep small XHTML files usable while still requiring more headroom for larger chapters.
+constexpr size_t MIN_FREE_HEAP_FOR_TINY_SECTION_BUILD = 30 * 1024;   // 30KB
+constexpr size_t MIN_FREE_HEAP_FOR_SMALL_SECTION_BUILD = 36 * 1024;  // 36KB
+constexpr size_t MIN_FREE_HEAP_FOR_MEDIUM_SECTION_BUILD = 48 * 1024; // 48KB
+constexpr size_t MIN_FREE_HEAP_FOR_LARGE_SECTION_BUILD = 64 * 1024;  // 64KB
+constexpr size_t MIN_FREE_HEAP_AFTER_CSS_LOAD = 64 * 1024;           // 64KB
+// ZIP inflate streaming needs a 32KB sliding window plus a little room for file and temp allocations.
+constexpr size_t MIN_MAX_ALLOC_FOR_SECTION_STREAM = 30 * 1024;  // 30KB
+constexpr size_t MIN_FREE_HEAP_FOR_SECTION_STREAM = 30 * 1024;  // 30KB
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(bool) + sizeof(uint8_t) + sizeof(bool) + sizeof(uint8_t) +  // charSpacing
@@ -26,6 +33,30 @@ constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) +
 
 double msToSeconds(const uint32_t elapsedMs) {
   return static_cast<double>(elapsedMs) / 1000.0;
+}
+
+bool hasEnoughHeapForSectionStream() {
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  const uint32_t maxAllocHeap = ESP.getMaxAllocHeap();
+  const bool ok = freeHeap >= MIN_FREE_HEAP_FOR_SECTION_STREAM && maxAllocHeap >= MIN_MAX_ALLOC_FOR_SECTION_STREAM;
+  if (!ok) {
+    LOG_ERR("SCT", "Insufficient heap for section stream (free=%u, maxAlloc=%u, need free>=%zu maxAlloc>=%zu)",
+            freeHeap, maxAllocHeap, MIN_FREE_HEAP_FOR_SECTION_STREAM, MIN_MAX_ALLOC_FOR_SECTION_STREAM);
+  }
+  return ok;
+}
+
+size_t requiredHeapForSectionBuild(const uint32_t htmlSize) {
+  if (htmlSize <= 2 * 1024) {
+    return MIN_FREE_HEAP_FOR_TINY_SECTION_BUILD;
+  }
+  if (htmlSize <= 10 * 1024) {
+    return MIN_FREE_HEAP_FOR_SMALL_SECTION_BUILD;
+  }
+  if (htmlSize <= 32 * 1024) {
+    return MIN_FREE_HEAP_FOR_MEDIUM_SECTION_BUILD;
+  }
+  return MIN_FREE_HEAP_FOR_LARGE_SECTION_BUILD;
 }
 }  // namespace
 
@@ -177,6 +208,12 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     Storage.mkdir(sectionsDir.c_str());
   }
 
+  // ZIP inflation needs a 32KB contiguous buffer. Check this before we spend
+  // memory on CSS/cache setup or temp-file retries.
+  if (!hasEnoughHeapForSectionStream()) {
+    return false;
+  }
+
   // Retry logic for SD card timing issues
   bool success = false;
   uint32_t fileSize = 0;
@@ -227,27 +264,37 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
                          verticalMode, charSpacing);
   std::vector<uint32_t> lut = {};
 
-  // Derive the content base directory and image cache path prefix for the parser
-  size_t lastSlash = localPath.find_last_of('/');
-  std::string contentBase = (lastSlash != std::string::npos) ? localPath.substr(0, lastSlash + 1) : "";
-  std::string imageBasePath = epub->getCachePath() + "/img_" + std::to_string(spineIndex) + "_";
-
   CssParser* cssParser = nullptr;
   if (embeddedStyle) {
     cssParser = epub->getCssParser();
     if (cssParser) {
       if (!cssParser->loadFromCache()) {
         LOG_ERR("SCT", "Failed to load CSS from cache");
+      } else if (cssParser->empty()) {
+        LOG_DBG("SCT", "CSS cache has no rules, skipping stylesheet lookup for this section");
+        cssParser->clear();
+        cssParser = nullptr;
+      } else if (ESP.getFreeHeap() < MIN_FREE_HEAP_AFTER_CSS_LOAD) {
+        LOG_INF("SCT", "Skipping external CSS for section build (rules=%zu, free=%u, need>=%zu)", cssParser->ruleCount(),
+                ESP.getFreeHeap(), MIN_FREE_HEAP_AFTER_CSS_LOAD);
+        cssParser->clear();
+        cssParser = nullptr;
       }
     }
   }
 
+  // Derive the content base directory and image cache path prefix for the parser
+  size_t lastSlash = localPath.find_last_of('/');
+  std::string contentBase = (lastSlash != std::string::npos) ? localPath.substr(0, lastSlash + 1) : "";
+  std::string imageBasePath = epub->getCachePath() + "/img_" + std::to_string(spineIndex) + "_";
+
   // Pre-check heap before heavy allocation work.
   // On ESP32 without C++ exceptions, new/make_shared call abort() on failure.
   const uint32_t freeHeapBeforeBuild = ESP.getFreeHeap();
-  if (freeHeapBeforeBuild < MIN_FREE_HEAP_FOR_SECTION_BUILD) {
-    LOG_ERR("SCT", "Insufficient heap for section build (%u bytes free, need %zu), aborting gracefully",
-            freeHeapBeforeBuild, MIN_FREE_HEAP_FOR_SECTION_BUILD);
+  const size_t requiredHeapBeforeBuild = requiredHeapForSectionBuild(fileSize);
+  if (freeHeapBeforeBuild < requiredHeapBeforeBuild) {
+    LOG_ERR("SCT", "Insufficient heap for section build (%u bytes free, need %zu, html=%lu), aborting gracefully",
+            freeHeapBeforeBuild, requiredHeapBeforeBuild, static_cast<unsigned long>(fileSize));
     file.close();
     Storage.remove(tmpSectionPath.c_str());
     Storage.remove(tmpHtmlPath.c_str());
@@ -256,6 +303,8 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     }
     return false;
   }
+  LOG_DBG("SCT", "Section build heap check passed (free=%u, need=%zu, html=%lu)", freeHeapBeforeBuild,
+          requiredHeapBeforeBuild, static_cast<unsigned long>(fileSize));
 
   const uint32_t parseBuildStart = millis();
   const uint32_t estimatedBytesPerPage = verticalMode ? 700 : 3072;

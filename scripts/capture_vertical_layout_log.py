@@ -13,7 +13,20 @@ from pathlib import Path
 import serial
 
 
-DIAGNOSTIC_TAGS = ("VLAY", "VREN", "VPAGE", "ERS", "SCT", "EHP", "EBP", "MEM", "MAIN")
+DIAGNOSTIC_TAGS = (
+    "VLAY",
+    "VREN",
+    "VPAGE",
+    "ERS",
+    "SCT",
+    "EHP",
+    "EBP",
+    "MEM",
+    "MAIN",
+    "FCM",
+    "FDC",
+    "SDCF",
+)
 CRASH_PATTERNS = ("rst:", "Guru Meditation", "panic", "abort", "Backtrace", "Exception", "ELF file SHA256")
 
 

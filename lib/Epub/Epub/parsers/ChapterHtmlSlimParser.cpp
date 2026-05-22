@@ -24,9 +24,13 @@ constexpr size_t MIN_SIZE_FOR_POPUP = 10 * 1024;  // 10KB
 constexpr size_t PARSE_BUFFER_SIZE = 1024;
 // Minimum free heap to continue parsing. Below this, stop gracefully
 // to prevent abort() from failed allocations (no C++ exceptions on ESP32).
-// The parser now keeps a slightly tighter margin because vertical CJK layout
-// can run comfortably below the previous 40KB guard once zero-height glyphs are fixed.
-constexpr size_t MIN_FREE_HEAP_FOR_PARSING = 28 * 1024;  // 28KB
+// The parser uses a dual threshold:
+// - free heap keeps us away from general exhaustion
+// - max alloc heap keeps us away from fragmentation-driven aborts
+// This is intentionally permissive enough for large books, while still
+// stopping before the allocator falls over.
+constexpr size_t MIN_FREE_HEAP_FOR_PARSING = 24 * 1024;      // 24KB
+constexpr size_t MIN_MAX_ALLOC_FOR_PARSING = 32 * 1024;      // 32KB
 constexpr int VERTICAL_FIRST_COLUMN_INSET = 24;
 
 const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote"};
@@ -254,12 +258,13 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
 
 bool ChapterHtmlSlimParser::hasEnoughHeapForPageBuild(const char* context) {
   const uint32_t freeHeap = ESP.getFreeHeap();
-  if (freeHeap >= MIN_FREE_HEAP_FOR_PARSING) {
+  const uint32_t maxAllocHeap = ESP.getMaxAllocHeap();
+  if (freeHeap >= MIN_FREE_HEAP_FOR_PARSING || maxAllocHeap >= MIN_MAX_ALLOC_FOR_PARSING) {
     return true;
   }
 
-  LOG_ERR("EHP", "Low heap in %s (%u bytes free, need %zu), stopping page build safely", context, freeHeap,
-          MIN_FREE_HEAP_FOR_PARSING);
+  LOG_ERR("EHP", "Low heap in %s (%u bytes free, max alloc %u, need free>%zu or alloc>%zu), stopping page build safely",
+          context, freeHeap, maxAllocHeap, MIN_FREE_HEAP_FOR_PARSING, MIN_MAX_ALLOC_FOR_PARSING);
   parseAborted = true;
   return false;
 }
@@ -1053,7 +1058,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
   const uint32_t freeHeap = ESP.getFreeHeap();
   const uint32_t maxAllocHeap = ESP.getMaxAllocHeap();
   const bool earlyFlush = wordCount > 120 &&
-                          (freeHeap < MIN_FREE_HEAP_FOR_PARSING * 2 || maxAllocHeap < 32 * 1024);
+                          (freeHeap < MIN_FREE_HEAP_FOR_PARSING * 2 || maxAllocHeap < MIN_MAX_ALLOC_FOR_PARSING);
   if (normalFlush || earlyFlush) {
     LOG_DBG("EHP", "Text block too long, splitting into multiple pages");
     if (self->verticalMode) {
@@ -1365,8 +1370,11 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
     }
 
     // Periodic heap check during parsing to prevent abort() from failed allocations
-    if (!done && ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_PARSING) {
-      LOG_ERR("EHP", "Low heap during parsing (%u bytes), stopping gracefully", ESP.getFreeHeap());
+    const uint32_t loopFreeHeap = ESP.getFreeHeap();
+    const uint32_t loopMaxAllocHeap = ESP.getMaxAllocHeap();
+    if (!done && loopFreeHeap < MIN_FREE_HEAP_FOR_PARSING && loopMaxAllocHeap < MIN_MAX_ALLOC_FOR_PARSING) {
+      LOG_ERR("EHP", "Low heap during parsing (%u bytes free, max alloc %u), stopping gracefully", loopFreeHeap,
+              loopMaxAllocHeap);
       XML_StopParser(parser, XML_FALSE);
       XML_SetElementHandler(parser, nullptr, nullptr);
       XML_SetCharacterDataHandler(parser, nullptr);

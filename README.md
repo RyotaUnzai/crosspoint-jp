@@ -1,8 +1,8 @@
-# CrossPoint JP
+# YomiPoint
 
 Xteink X3 向けの日本語EPUB閲覧に特化したフォーク。
 
-本家 [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader) (v1.2.0) をベースに、[CJKフォーク](https://github.com/aBER0724/crosspoint-reader-cjk)の改善を統合し、日本語の読書体験を向上させた、[CrossPoint JP](https://github.com/zrn-ns/crosspoint-jp)をベースに縦読みやレイアウトをより最適にしたものです。
+本家 [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader) (v1.2.0) をベースに、[CJKフォーク](https://github.com/aBER0724/crosspoint-reader-cjk)の改善を統合し、日本語の読書体験を向上させた、[YomiPoint](https://github.com/zrn-ns/crosspoint-jp)をベースに縦読みやレイアウトをより最適にしたものです。
 
 <img src="./docs/images/cover.jpg" width="400" alt="縦書き表示"> <img src="./docs/images/home.jpg" width="400" alt="ホーム画面">
 
@@ -26,10 +26,10 @@ Xteink X3 向けの日本語EPUB閲覧に特化したフォーク。
 
 ### Web Flasher（推奨）
 
-**[CrossPoint JP Flasher](https://zrn-ns.github.io/crosspoint-jp/)** からブラウザ上で簡単にインストールできます。
+**[YomiPoint Flasher](https://zrn-ns.github.io/crosspoint-jp/)** からブラウザ上で簡単にインストールできます。
 
 1. XteinkデバイスをUSB-Cケーブルでパソコンに接続
-2. Chrome または Edge で [CrossPoint JP Flasher](https://zrn-ns.github.io/crosspoint-jp/) を開く
+2. Chrome または Edge で [YomiPoint Flasher](https://zrn-ns.github.io/crosspoint-jp/) を開く
 3. ファームウェア（開発版 / 安定版）を選択し「インストール」をクリック
 4. シリアルポート選択ダイアログでデバイスを選択
 
@@ -82,7 +82,7 @@ Xteink X3 向けの日本語EPUB閲覧に特化したフォーク。
 
 | プロジェクト | 内容 |
 |---|---|
-| [CrossPoint JP](https://github.com/zrn-ns/crosspoint-jp) | 日本語フォーク (v0.1.7 ベース) |
+| [YomiPoint](https://github.com/zrn-ns/crosspoint-jp) | 日本語フォーク (v0.1.7 ベース) |
 | [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader) | 本家 (v1.2.0 ベース) |
 | [crosspoint-reader-cjk](https://github.com/aBER0724/crosspoint-reader-cjk) | CJKフォーク（文字間隔修正、段落インデント等） |
 | [PR #1392](https://github.com/crosspoint-reader/crosspoint-reader/pull/1392) | SDカードフォント（22ファミリー、CJK対応） |

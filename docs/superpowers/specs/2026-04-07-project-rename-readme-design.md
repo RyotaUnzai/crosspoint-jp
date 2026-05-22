@@ -1,8 +1,8 @@
-# CrossPoint JP プロジェクト名変更・README刷新 設計
+# YomiPoint プロジェクト名変更・README刷新 設計
 
 ## 概要
 
-フォークの独自性を明確にするため、プロジェクト名を「CrossPoint JP」に変更し、
+フォークの独自性を明確にするため、プロジェクト名を「YomiPoint」に変更し、
 日本語ユーザー向けのREADMEに刷新する。
 
 対応Issue: https://github.com/zrn-ns/crosspoint-reader/issues/1
@@ -21,7 +21,7 @@
 ### 構成
 
 1. **タイトル・概要**
-   - CrossPoint JP とは何か
+   - YomiPoint とは何か
    - 日本語EPUBの閲覧に特化したXteink向けファームウェアフォーク
    - 本家 crosspoint-reader をベースに、CJKフォークの改善を統合
 

@@ -1,8 +1,8 @@
-# CrossPoint JP Web Flasher 設計Spec
+# YomiPoint Web Flasher 設計Spec
 
 ## 概要
 
-ESP Web Toolsを使った静的Webページをcrosspoint-jpリポジトリ内に追加し、GitHub Pagesでホスティングする。ユーザーはブラウザからUSB接続でCrossPoint JPファームウェアを書き込める。
+ESP Web Toolsを使った静的Webページをcrosspoint-jpリポジトリ内に追加し、GitHub Pagesでホスティングする。ユーザーはブラウザからUSB接続でYomiPointファームウェアを書き込める。
 
 ## 動機
 
@@ -34,7 +34,7 @@ ESP Web Toolsは以下形式のJSONマニフェストを要求する:
 
 ```json
 {
-  "name": "CrossPoint JP",
+  "name": "YomiPoint",
   "version": "dev-20260407-120000",
   "builds": [
     {
@@ -65,7 +65,7 @@ ESP Web Toolsは以下形式のJSONマニフェストを要求する:
 
 #### 構成要素
 
-1. **ヘッダー**: 「CrossPoint JP Flasher」タイトル
+1. **ヘッダー**: 「YomiPoint Flasher」タイトル
 2. **ファームウェア選択**: ラジオボタン
    - 「最新安定版 (Stable)」→ `manifest_stable.json` を使用
    - 「開発版 (Dev Build)」→ `manifest_dev.json` を使用

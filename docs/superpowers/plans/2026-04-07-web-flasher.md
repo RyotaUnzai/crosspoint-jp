@@ -38,7 +38,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CrossPoint JP Flasher</title>
+  <title>YomiPoint Flasher</title>
   <script
     type="module"
     src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"
@@ -109,7 +109,7 @@
   </style>
 </head>
 <body>
-  <h1>CrossPoint JP Flasher</h1>
+  <h1>YomiPoint Flasher</h1>
   <p class="subtitle">ブラウザからXteinkデバイスにファームウェアを書き込めます</p>
 
   <div class="no-serial" id="no-serial">
@@ -312,7 +312,7 @@ jobs:
             DEV_BASE="https://github.com/${REPO}/releases/download/${DEV_TAG}"
             cat > _site/manifest_dev.json <<MANIFEST
           {
-            "name": "CrossPoint JP (Dev)",
+            "name": "YomiPoint (Dev)",
             "version": "${DEV_TAG}",
             "builds": [
               {
@@ -337,7 +337,7 @@ jobs:
             STABLE_BASE="https://github.com/${REPO}/releases/download/${STABLE_TAG}"
             cat > _site/manifest_stable.json <<MANIFEST
           {
-            "name": "CrossPoint JP (Stable)",
+            "name": "YomiPoint (Stable)",
             "version": "${STABLE_TAG}",
             "builds": [
               {
@@ -415,10 +415,10 @@ git commit -m "✨ Web Flasherデプロイワークフローを追加（Issue #9
 
 ### Web Flasher（推奨）
 
-**[CrossPoint JP Flasher](https://zrn-ns.github.io/crosspoint-jp/)** からブラウザ上で簡単にインストールできます。
+**[YomiPoint Flasher](https://zrn-ns.github.io/crosspoint-jp/)** からブラウザ上で簡単にインストールできます。
 
 1. XteinkデバイスをUSB-Cケーブルでパソコンに接続
-2. Chrome または Edge で [CrossPoint JP Flasher](https://zrn-ns.github.io/crosspoint-jp/) を開く
+2. Chrome または Edge で [YomiPoint Flasher](https://zrn-ns.github.io/crosspoint-jp/) を開く
 3. ファームウェア（開発版 / 安定版）を選択し「インストール」をクリック
 4. シリアルポート選択ダイアログでデバイスを選択
 

@@ -39,7 +39,7 @@ jobs:
 
             cat > _site/manifest_dev.json <<MANIFEST
           {
-            "name": "CrossPoint JP (Dev)",
+            "name": "YomiPoint (Dev)",
             "version": "${DEV_TAG}",
             "builds": [
               {
@@ -68,7 +68,7 @@ jobs:
 
             cat > _site/manifest_stable.json <<MANIFEST
           {
-            "name": "CrossPoint JP (Stable)",
+            "name": "YomiPoint (Stable)",
             "version": "${STABLE_TAG}",
             "builds": [
               {

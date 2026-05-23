@@ -11,6 +11,7 @@
 #include "components/UITheme.h"
 #include "components/icons/book_finished24.h"
 #include "components/icons/book_reading24.h"
+#include "components/icons/book24.h"
 #include "components/icons/cover.h"
 #include "fontIds.h"
 
@@ -88,9 +89,9 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
       bool bookSelected = (selectorIndex == i);
 
       int tileX = Lyra3CoversMetrics::values.contentSidePadding + tileWidth * i;
-
-      const int maxLineWidth = tileWidth - 2 * hPaddingInSelection;
-
+      constexpr int titleIconSize = 24;
+      constexpr int titleIconGap = 4;
+      const int maxLineWidth = tileWidth - 2 * hPaddingInSelection - titleIconSize - titleIconGap;
       auto titleLines = renderer.wrappedText(SMALL_FONT_ID, recentBooks[i].title.c_str(), maxLineWidth, 3);
 
       constexpr int readingStatusIconSize = 24;
@@ -100,7 +101,10 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
           (bookStatuses[i] == ReadingStatus::Reading || bookStatuses[i] == ReadingStatus::Finished);
 
       const int titleLineHeight = renderer.getLineHeight(SMALL_FONT_ID);
-      const int dynamicBlockHeight = static_cast<int>(titleLines.size()) * titleLineHeight;
+      const int titlePrefixHeight = std::max(titleLineHeight, titleIconSize);
+      const int dynamicBlockHeight = titleLines.empty()
+                                         ? 0
+                                         : titlePrefixHeight + (static_cast<int>(titleLines.size()) - 1) * titleLineHeight;
       const int readingStatusBlockHeight =
           hasReadingStatusIcon ? (readingStatusIconSize + readingStatusIconTopMargin) : 0;
       // Add a little padding below the text inside the selection box just like the top padding (5 + hPaddingSelection)
@@ -120,8 +124,19 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
       }
 
       int currentY = tileY + Lyra3CoversMetrics::values.homeCoverHeight + hPaddingInSelection + 5;
+      const int titleTextX = tileX + hPaddingInSelection + titleIconSize + titleIconGap;
+      const int titleIconX = tileX + hPaddingInSelection;
+      const int titlePrefixOffsetY = (titlePrefixHeight - titleLineHeight) / 2;
+      const int titleIconOffsetY = (titlePrefixHeight - titleIconSize) / 2;
+      const uint8_t* titleIconBitmap = Book24Icon;
+
       for (const auto& line : titleLines) {
-        renderer.drawText(SMALL_FONT_ID, tileX + hPaddingInSelection, currentY, line.c_str(), true);
+        if (line == titleLines.front()) {
+          renderer.drawIcon(titleIconBitmap, titleIconX, currentY + titleIconOffsetY, titleIconSize, titleIconSize);
+          renderer.drawText(SMALL_FONT_ID, titleTextX, currentY + titlePrefixOffsetY, line.c_str(), true);
+        } else {
+          renderer.drawText(SMALL_FONT_ID, titleTextX, currentY, line.c_str(), true);
+        }
         currentY += titleLineHeight;
       }
       if (hasReadingStatusIcon) {

@@ -52,21 +52,15 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
 
 void EpubReaderMenuActivity::onEnter() {
   Activity::onEnter();
-  skipNextButtonCheck = true;
+  skipFirstLoop = true;
   requestUpdate();
 }
 
 void EpubReaderMenuActivity::onExit() { Activity::onExit(); }
 
 void EpubReaderMenuActivity::loop() {
-  if (skipNextButtonCheck) {
-    const bool confirmCleared = !mappedInput.isPressed(MappedInputManager::Button::Confirm) &&
-                                !mappedInput.wasReleased(MappedInputManager::Button::Confirm);
-    const bool backCleared = !mappedInput.isPressed(MappedInputManager::Button::Back) &&
-                             !mappedInput.wasReleased(MappedInputManager::Button::Back);
-    if (confirmCleared && backCleared) {
-      skipNextButtonCheck = false;
-    }
+  if (skipFirstLoop) {
+    skipFirstLoop = false;
     return;
   }
 

@@ -59,16 +59,31 @@ class EpubReaderActivity final : public Activity {
 
   void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft);
+  void displayRenderedPage(const Page& page, int orientedMarginLeft, int orientedMarginTop, int viewportWidth,
+                           bool imagePageWithAA, bool nearChapterEnd);
   void renderStatusBar() const;
+  bool shouldUseSlowRefreshForCurrentPage() const;
   void silentIndexNextChapterIfNeeded(uint16_t viewportWidth, uint16_t viewportHeight);
   void saveProgress(int spineIndex, int currentPage, int pageCount, bool isFinished = false);
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
   void invalidateSectionPreservingPosition();
+  void openChapterSelection();
+  void openFootnotes();
+  void openPercentSelection();
+  void openReaderSettings();
+  void displayPageQr();
+  void clearCacheAndGoHome();
+  void syncReaderState();
   void onReaderMenuBack(uint8_t orientation);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
+  void refreshBackgroundCacheTaskHandle();
+  bool handleAutomaticPageTurn();
+  bool handleReaderMenuOpen();
+  bool handleBackNavigation();
+  bool handlePageTurnInput();
   void pageTurn(bool isForwardTurn);
   void pregenerateCache();
   void loadHeavyBookMode();
@@ -76,6 +91,7 @@ class EpubReaderActivity final : public Activity {
   void clearPrefetchedNextPage();
   void resetTransientReaderState(bool cancelBackgroundCache = false);
   std::unique_ptr<Page> loadPageForRender();
+  bool shouldPrefetchNextPage() const;
   void prefetchNextPageIfHelpful(uint16_t viewportWidth, uint16_t viewportHeight);
   void startBackgroundCacheGeneration(int startSpineIndex, int endSpineIndex, bool includeImages,
                                       uint16_t viewportWidth, uint16_t viewportHeight);

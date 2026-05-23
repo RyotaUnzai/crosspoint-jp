@@ -68,4 +68,15 @@ class FontCacheManager {
   std::string scanCompressedText_;
   uint32_t scanCompressedStyleCounts_[4] = {};
   int scanCompressedFontId_ = -1;
+
+  void resetScanState();
+  void resetPerFontScanState();
+  void resetCompressedScanState();
+  void recordScanTextForSdFont(SdCardFont* font, const char* text, uint32_t cpCount, uint8_t baseStyle);
+  void recordScanTextForCompressedFont(int fontId, const char* text, uint32_t cpCount, uint8_t baseStyle);
+  static uint8_t buildStyleMask(const uint32_t styleCounts[4]);
+  void prewarmSdCardFont(SdCardFont* font, const char* utf8Text, uint8_t styleMask);
+  void prewarmCompressedFont(int fontId, const char* utf8Text, uint8_t styleMask);
+  void prewarmRecordedScanData();
+  static void logPrewarmMisses(const char* tag, int missed, uint8_t styleMask);
 };

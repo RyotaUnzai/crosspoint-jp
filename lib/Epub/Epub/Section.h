@@ -3,11 +3,14 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "Epub.h"
 
 class Page;
 class GfxRenderer;
+class CssParser;
 
 class Section {
   std::shared_ptr<Epub> epub;
@@ -16,11 +19,19 @@ class Section {
   std::string filePath;
   FsFile file;
 
-  void writeSectionFileHeader(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
+ void writeSectionFileHeader(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
                               uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled,
                               bool firstLineIndent, bool embeddedStyle, uint8_t imageRendering, bool verticalMode,
                               uint8_t charSpacing);
   uint32_t onPageComplete(std::unique_ptr<Page> page);
+  CssParser* loadEmbeddedCssForSection(bool embeddedStyle);
+  bool streamSpineItemToTempHtml(const std::string& localPath, const std::string& tmpHtmlPath,
+                                 uint32_t& fileSize);
+  bool readSectionOffsets(FsFile& file, uint32_t& lutOffset, uint32_t& anchorMapOffset) const;
+  bool finalizeSectionFile(const std::vector<uint32_t>& lut,
+                           const std::vector<std::pair<std::string, uint16_t>>& anchors,
+                           const std::string& tmpSectionPath, CssParser* cssParser, uint32_t createSectionStart,
+                           uint32_t parseBuildStart);
 
  public:
   uint16_t pageCount = 0;

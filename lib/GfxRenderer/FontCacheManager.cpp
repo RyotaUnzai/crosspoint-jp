@@ -39,6 +39,12 @@ void FontCacheManager::clearCache() {
   forEachUniqueSdCardFont(sdCardFonts_, [](SdCardFont* f) { f->clearCache(); });
 }
 
+void FontCacheManager::logPrewarmMisses(const char* tag, const int missed, const uint8_t styleMask) {
+  if (missed > 0) {
+    LOG_DBG("FCM", "%s: %d glyph(s) not cached (styleMask=0x%02X)", tag, missed, styleMask);
+  }
+}
+
 void FontCacheManager::freeKernLigatureData() {
   forEachUniqueSdCardFont(sdCardFonts_, [](SdCardFont* f) { f->freeKernLigatureData(); });
 }
@@ -47,26 +53,12 @@ void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t st
   // SD card font prewarm path: prewarm all requested styles in one call
   auto it = sdCardFonts_.find(fontId);
   if (it != sdCardFonts_.end()) {
-    int missed = it->second->prewarm(utf8Text, styleMask);
-    if (missed > 0) {
-      LOG_DBG("FCM", "prewarmCache(SD): %d glyph(s) not found (styleMask=0x%02X)", missed, styleMask);
-    }
+    prewarmSdCardFont(it->second, utf8Text, styleMask);
     return;
   }
 
   // Standard compressed font prewarm path: loop over all requested styles
-  if (!fontDecompressor_ || fontMap_.count(fontId) == 0) return;
-
-  for (uint8_t i = 0; i < 4; i++) {
-    if (!(styleMask & (1 << i))) continue;
-    auto style = static_cast<EpdFontFamily::Style>(i);
-    const EpdFontData* data = fontMap_.at(fontId).getData(style);
-    if (!data || !data->groups) continue;
-    int missed = fontDecompressor_->prewarmCache(data, utf8Text);
-    if (missed > 0) {
-      LOG_DBG("FCM", "prewarmCache: %d glyph(s) not cached for style %d", missed, i);
-    }
-  }
+  prewarmCompressedFont(fontId, utf8Text, styleMask);
 }
 
 void FontCacheManager::logStats(const char* label) {
@@ -81,6 +73,62 @@ void FontCacheManager::resetStats() {
 
 bool FontCacheManager::isScanning() const { return scanMode_ == ScanMode::Scanning; }
 
+void FontCacheManager::resetPerFontScanState() {
+  for (int i = 0; i < MAX_SCAN_FONTS; i++) {
+    scanPerFont_[i].font = nullptr;
+    scanPerFont_[i].text.clear();
+    memset(scanPerFont_[i].styleCounts, 0, sizeof(scanPerFont_[i].styleCounts));
+  }
+  scanPerFontCount_ = 0;
+}
+
+void FontCacheManager::resetCompressedScanState() {
+  scanCompressedText_.clear();
+  scanCompressedText_.reserve(2048);
+  memset(scanCompressedStyleCounts_, 0, sizeof(scanCompressedStyleCounts_));
+  scanCompressedFontId_ = -1;
+}
+
+void FontCacheManager::resetScanState() {
+  resetPerFontScanState();
+  resetCompressedScanState();
+}
+
+uint8_t FontCacheManager::buildStyleMask(const uint32_t styleCounts[4]) {
+  uint8_t styleMask = 0;
+  for (uint8_t s = 0; s < 4; s++) {
+    if (styleCounts[s] > 0) styleMask |= (1 << s);
+  }
+  return styleMask == 0 ? 1 : styleMask;
+}
+
+void FontCacheManager::recordScanTextForSdFont(SdCardFont* font, const char* text, const uint32_t cpCount,
+                                               const uint8_t baseStyle) {
+  int idx = -1;
+  for (int i = 0; i < scanPerFontCount_; i++) {
+    if (scanPerFont_[i].font == font) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx < 0 && scanPerFontCount_ < MAX_SCAN_FONTS) {
+    idx = scanPerFontCount_++;
+    scanPerFont_[idx].font = font;
+    scanPerFont_[idx].text.reserve(512);
+  }
+  if (idx >= 0) {
+    scanPerFont_[idx].text += text;
+    scanPerFont_[idx].styleCounts[baseStyle] += cpCount;
+  }
+}
+
+void FontCacheManager::recordScanTextForCompressedFont(const int fontId, const char* text, const uint32_t cpCount,
+                                                       const uint8_t baseStyle) {
+  scanCompressedText_ += text;
+  if (scanCompressedFontId_ < 0) scanCompressedFontId_ = fontId;
+  scanCompressedStyleCounts_[baseStyle] += cpCount;
+}
+
 void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::Style style) {
   const uint8_t baseStyle = static_cast<uint8_t>(style) & 0x03;
   const unsigned char* p = reinterpret_cast<const unsigned char*>(text);
@@ -93,28 +141,9 @@ void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::S
   // Route text to the correct SdCardFont (per-font tracking for efficient prewarm)
   auto it = sdCardFonts_.find(fontId);
   if (it != sdCardFonts_.end()) {
-    SdCardFont* font = it->second;
-    int idx = -1;
-    for (int i = 0; i < scanPerFontCount_; i++) {
-      if (scanPerFont_[i].font == font) {
-        idx = i;
-        break;
-      }
-    }
-    if (idx < 0 && scanPerFontCount_ < MAX_SCAN_FONTS) {
-      idx = scanPerFontCount_++;
-      scanPerFont_[idx].font = font;
-      scanPerFont_[idx].text.reserve(512);
-    }
-    if (idx >= 0) {
-      scanPerFont_[idx].text += text;
-      scanPerFont_[idx].styleCounts[baseStyle] += cpCount;
-    }
+    recordScanTextForSdFont(it->second, text, cpCount, baseStyle);
   } else {
-    // Compressed (non-SD) font path
-    scanCompressedText_ += text;
-    if (scanCompressedFontId_ < 0) scanCompressedFontId_ = fontId;
-    scanCompressedStyleCounts_[baseStyle] += cpCount;
+    recordScanTextForCompressedFont(fontId, text, cpCount, baseStyle);
   }
 }
 
@@ -124,52 +153,53 @@ FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager) : manage
   manager_->scanMode_ = ScanMode::Scanning;
   manager_->clearCache();
   manager_->resetStats();
-
-  // Reset per-SdCardFont scan data
-  for (int i = 0; i < MAX_SCAN_FONTS; i++) {
-    manager_->scanPerFont_[i].font = nullptr;
-    manager_->scanPerFont_[i].text.clear();
-    memset(manager_->scanPerFont_[i].styleCounts, 0, sizeof(manager_->scanPerFont_[i].styleCounts));
-  }
-  manager_->scanPerFontCount_ = 0;
-
-  // Reset compressed font scan data
-  manager_->scanCompressedText_.clear();
-  manager_->scanCompressedText_.reserve(2048);
-  memset(manager_->scanCompressedStyleCounts_, 0, sizeof(manager_->scanCompressedStyleCounts_));
-  manager_->scanCompressedFontId_ = -1;
+  manager_->resetScanState();
 }
 
-void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
-  manager_->scanMode_ = ScanMode::None;
-
+void FontCacheManager::prewarmRecordedScanData() {
   // Prewarm each SD card font with only its own text (per-font tracking)
-  for (int i = 0; i < manager_->scanPerFontCount_; i++) {
-    auto& entry = manager_->scanPerFont_[i];
+  for (int i = 0; i < scanPerFontCount_; i++) {
+    auto& entry = scanPerFont_[i];
     if (entry.text.empty() || !entry.font) continue;
 
-    uint8_t styleMask = 0;
-    for (uint8_t s = 0; s < 4; s++) {
-      if (entry.styleCounts[s] > 0) styleMask |= (1 << s);
-    }
-    if (styleMask == 0) styleMask = 1;
-
-    entry.font->prewarm(entry.text.c_str(), styleMask);
+    const uint8_t styleMask = buildStyleMask(entry.styleCounts);
+    prewarmSdCardFont(entry.font, entry.text.c_str(), styleMask);
     entry.text.clear();
     entry.text.shrink_to_fit();
   }
 
   // Prewarm compressed (non-SD) font
-  if (!manager_->scanCompressedText_.empty() && manager_->scanCompressedFontId_ >= 0) {
-    uint8_t styleMask = 0;
-    for (uint8_t i = 0; i < 4; i++) {
-      if (manager_->scanCompressedStyleCounts_[i] > 0) styleMask |= (1 << i);
-    }
-    if (styleMask == 0) styleMask = 1;
-    manager_->prewarmCache(manager_->scanCompressedFontId_, manager_->scanCompressedText_.c_str(), styleMask);
-    manager_->scanCompressedText_.clear();
-    manager_->scanCompressedText_.shrink_to_fit();
+  if (!scanCompressedText_.empty() && scanCompressedFontId_ >= 0) {
+    const uint8_t styleMask = buildStyleMask(scanCompressedStyleCounts_);
+    prewarmCompressedFont(scanCompressedFontId_, scanCompressedText_.c_str(), styleMask);
+    scanCompressedText_.clear();
+    scanCompressedText_.shrink_to_fit();
   }
+}
+
+void FontCacheManager::prewarmSdCardFont(SdCardFont* font, const char* utf8Text, uint8_t styleMask) {
+  if (!font || !utf8Text || *utf8Text == '\0') return;
+  int missed = font->prewarm(utf8Text, styleMask);
+  logPrewarmMisses("prewarmCache(SD)", missed, styleMask);
+}
+
+void FontCacheManager::prewarmCompressedFont(int fontId, const char* utf8Text, uint8_t styleMask) {
+  if (!fontDecompressor_ || fontMap_.count(fontId) == 0 || !utf8Text || *utf8Text == '\0') return;
+
+  const auto& font = fontMap_.at(fontId);
+  for (uint8_t i = 0; i < 4; i++) {
+    if (!(styleMask & (1 << i))) continue;
+    auto style = static_cast<EpdFontFamily::Style>(i);
+    const EpdFontData* data = font.getData(style);
+    if (!data || !data->groups) continue;
+    int missed = fontDecompressor_->prewarmCache(data, utf8Text);
+    logPrewarmMisses("prewarmCache", missed, styleMask);
+  }
+}
+
+void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
+  manager_->scanMode_ = ScanMode::None;
+  manager_->prewarmRecordedScanData();
 }
 
 FontCacheManager::PrewarmScope::~PrewarmScope() {

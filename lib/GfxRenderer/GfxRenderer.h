@@ -5,6 +5,7 @@
 
 class FontCacheManager;
 class SdCardFont;
+class FontManager;
 
 #include <cstring>
 #include <map>
@@ -76,6 +77,10 @@ class GfxRenderer {
   mutable bool skipDarkModeForImages = false;
   void renderChar(int fontId, const EpdFontFamily& fontFamily, uint32_t cp, int* x, const int* y, bool pixelState,
                   EpdFontFamily::Style style) const;
+  bool renderReaderFontGlyph(uint32_t cp, int* x, int y, bool pixelState, bool isCjk, FontManager& fm) const;
+  bool renderUiFontGlyph(uint32_t cp, int* x, int y, bool pixelState, bool isCjk, FontManager& fm) const;
+  bool prepareVerticalTextRender(int fontId, const char* text, EpdFontFamily::Style style, bool scanMode,
+                                 int& effectiveFontId, const EpdFontFamily*& font, SdCardFont*& sdFont) const;
   void renderExternalGlyph(const uint8_t* bitmap, ExternalFont* font, int* x, int y, bool pixelState,
                            int advanceOverride = -1, int minX = 0) const;
   // Render CJK character using built-in UI font (from PROGMEM)
@@ -84,6 +89,9 @@ class GfxRenderer {
   bool isReaderFont(int fontId) const;
   // Get effective font ID, handling fallback for external reader font IDs
   int getEffectiveFontId(int fontId) const;
+  void recordScanTextIfNeeded(int fontId, const char* text, EpdFontFamily::Style style) const;
+  int measureScanModeTextWidth(int fontId, int effectiveFontId, const char* text,
+                               EpdFontFamily::Style style) const;
   void freeBwBufferChunks();
   template <Color color>
   void drawPixelDither(int x, int y) const;
@@ -215,6 +223,10 @@ class GfxRenderer {
   // UI Components
   void drawButtonHints(int fontId, const char* btn1, const char* btn2, const char* btn3, const char* btn4);
   void drawSideButtonHints(int fontId, const char* topBtn, const char* bottomBtn) const;
+  void drawCenteredButtonLabel(int fontId, int buttonX, int buttonY, int buttonWidth, int buttonHeight,
+                               int textYOffset, const char* label) const;
+  void drawCenteredRotatedButtonLabel(int fontId, int buttonX, int buttonY, int buttonWidth, int buttonHeight,
+                                      const char* label) const;
 
   // Helper for drawing rotated text (90 degrees clockwise, for side buttons)
   void drawTextRotated90CW(int fontId, int x, int y, const char* text, bool black = true,

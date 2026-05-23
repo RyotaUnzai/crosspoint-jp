@@ -63,7 +63,7 @@ class EpubReaderMenuActivity final : public Activity {
   int currentPage = 0;
   int totalPages = 0;
   int bookProgressPercent = 0;
-  bool skipNextButtonCheck = true;
+  bool skipFirstLoop = true;
   bool verticalMode = false;
 
   std::string getMenuItemValue(MenuAction action) const;

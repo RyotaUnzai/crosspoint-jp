@@ -9,6 +9,7 @@
 #include <Utf8.h>
 
 #include <algorithm>
+#include <climits>
 
 #include "FontCacheManager.h"
 #include "VerticalTextUtils.h"
@@ -660,6 +661,100 @@ int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontF
   const uint16_t scale = getSdCardFontScale(effectiveFontId);
   if (scale != 256) w = (w * scale + 128) >> 8;
   return w;
+}
+
+TextBounds GfxRenderer::getTextBounds(const int fontId, const char* text, const EpdFontFamily::Style style) const {
+  if (text == nullptr || *text == '\0') {
+    return {0, 0, 0, 0};
+  }
+
+  const int effectiveFontId = getEffectiveFontId(fontId);
+  if (!isUiFont(fontId) || fontMap.count(effectiveFontId) != 0) {
+    return {0, 0, getTextWidth(fontId, text, style), getTextHeight(fontId)};
+  }
+
+  FontManager& fm = FontManager::getInstance();
+  ExternalFont* uiExtFont = nullptr;
+  const bool hasExternalUiFont =
+      fm.isUiFontEnabled() && (uiExtFont = fm.getActiveUiFont()) != nullptr && uiExtFont->isLoaded();
+
+  int cursorX = 0;
+  int minX = INT_MAX;
+  int minY = INT_MAX;
+  int maxX = INT_MIN;
+  int maxY = INT_MIN;
+
+  const char* ptr = text;
+  while (uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&ptr))) {
+    bool measured = false;
+
+    if (CjkUiFont20::hasCjkUiGlyph(cp)) {
+      const uint8_t* bitmap = CjkUiFont20::getCjkUiGlyph(cp);
+      uint8_t advanceWidth = CjkUiFont20::getCjkUiGlyphWidth(cp);
+      if (advanceWidth >= 20) {
+        advanceWidth = 18;
+      }
+
+      for (uint8_t glyphY = 0; glyphY < CjkUiFont20::CJK_UI_FONT_HEIGHT; glyphY++) {
+        for (uint8_t glyphX = 0; glyphX < CjkUiFont20::CJK_UI_FONT_WIDTH; glyphX++) {
+          const uint8_t byteIndex = glyphY * CjkUiFont20::CJK_UI_FONT_BYTES_PER_ROW + (glyphX / 8);
+          const uint8_t bitIndex = 7 - (glyphX % 8);
+          const uint8_t byte = pgm_read_byte(&bitmap[byteIndex]);
+          if (((byte >> bitIndex) & 1) == 0) {
+            continue;
+          }
+
+          minX = std::min(minX, cursorX + static_cast<int>(glyphX));
+          minY = std::min(minY, static_cast<int>(glyphY));
+          maxX = std::max(maxX, cursorX + static_cast<int>(glyphX));
+          maxY = std::max(maxY, static_cast<int>(glyphY));
+        }
+      }
+
+      cursorX += advanceWidth;
+      measured = true;
+    }
+
+    if (!measured && hasExternalUiFont) {
+      const uint8_t* bitmap = uiExtFont->getGlyph(cp);
+      if (bitmap) {
+        const uint8_t charWidth = uiExtFont->getCharWidth();
+        const uint8_t charHeight = uiExtFont->getCharHeight();
+        const uint8_t bytesPerRow = (charWidth + 7) / 8;
+
+        for (uint8_t glyphY = 0; glyphY < charHeight; glyphY++) {
+          for (uint8_t glyphX = 0; glyphX < charWidth; glyphX++) {
+            const uint8_t byteIndex = glyphY * bytesPerRow + (glyphX / 8);
+            const uint8_t bitIndex = 7 - (glyphX % 8);
+            const uint8_t byte = bitmap[byteIndex];
+            if (((byte >> bitIndex) & 1) == 0) {
+              continue;
+            }
+
+            minX = std::min(minX, cursorX + static_cast<int>(glyphX));
+            minY = std::min(minY, static_cast<int>(glyphY));
+            maxX = std::max(maxX, cursorX + static_cast<int>(glyphX));
+            maxY = std::max(maxY, static_cast<int>(glyphY));
+          }
+        }
+
+        uint8_t advanceX = charWidth;
+        uiExtFont->getGlyphMetrics(cp, nullptr, &advanceX);
+        cursorX += advanceX;
+        measured = true;
+      }
+    }
+
+    if (!measured) {
+      cursorX += 10;
+    }
+  }
+
+  if (minX == INT_MAX || minY == INT_MAX) {
+    return {0, 0, getTextWidth(fontId, text, style), getTextHeight(fontId)};
+  }
+
+  return {minX, minY, maxX - minX + 1, maxY - minY + 1};
 }
 
 void GfxRenderer::drawCenteredText(const int fontId, const int y, const char* text, const bool black,

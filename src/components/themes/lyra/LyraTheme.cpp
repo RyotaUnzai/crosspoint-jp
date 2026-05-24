@@ -6,6 +6,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -34,6 +35,7 @@
 namespace {
 constexpr int batteryPercentSpacing = 4;
 constexpr int hPaddingInSelection = 8;
+constexpr int listValueRightInset = 6;
 constexpr int cornerRadius = 6;
 constexpr int topHintButtonY = 345;
 constexpr int popupMarginX = 16;
@@ -226,37 +228,94 @@ void LyraTheme::drawSubHeader(const GfxRenderer& renderer, Rect rect, const char
   renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1, true);
 }
 
-void LyraTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
-                           bool selected) const {
+void LyraTheme::drawTabBar(const GfxRenderer& renderer,
+                           Rect rect,
+                           const std::vector<TabInfo>& tabs,
+                           bool isTabBarActive) const {
+  constexpr int activeSelectedTabTopInset = 1;
+  constexpr int activeSelectedTabHeightReduction = 4;
+  constexpr int activeSelectedTabRightTrim = 1;
+
+  constexpr int selectedTabExtraWidth = 8;
+
+  constexpr int inactiveSelectedTabHeightReduction = 3;
+  constexpr int inactiveUnderlineBottomOffset = 3;
+  constexpr int inactiveUnderlineThickness = 2;
+  constexpr int inactiveSelectedTabBackgroundExtraWidth = 2;
+
+  constexpr int labelTopPadding = 6;
+  constexpr int labelXOffset = 2;
+
+  constexpr int bottomBorderInset = 1;
+
+  const int tabHorizontalPadding = hPaddingInSelection * 2;
+  const int tabSpacing = LyraMetrics::values.tabSpacing;
+  const int labelY = rect.y + labelTopPadding;
+  const int bottomBorderY = rect.y + rect.height - bottomBorderInset;
+
   int currentX = rect.x + LyraMetrics::values.contentSidePadding;
 
-  if (selected) {
+  const auto drawActiveSelectedTab = [&](int x, int width) {
+    renderer.fillRoundedRect(x,
+                             rect.y + activeSelectedTabTopInset,
+                             width - activeSelectedTabRightTrim,
+                             rect.height - activeSelectedTabHeightReduction,
+                             cornerRadius,
+                             Color::Black);
+  };
+
+  const auto drawInactiveSelectedTab = [&](int x, int width) {
+    const int underlineY = rect.y + rect.height - inactiveUnderlineBottomOffset;
+
+    renderer.fillRectDither(x,
+                            rect.y,
+                            width + inactiveSelectedTabBackgroundExtraWidth,
+                            rect.height - inactiveSelectedTabHeightReduction,
+                            Color::LightGray);
+
+    renderer.drawLine(x,
+                      underlineY,
+                      x + width,
+                      underlineY,
+                      inactiveUnderlineThickness,
+                      true);
+  };
+
+  if (isTabBarActive) {
     renderer.fillRectDither(rect.x, rect.y, rect.width, rect.height, Color::LightGray);
   }
 
   for (const auto& tab : tabs) {
     const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, tab.label, EpdFontFamily::REGULAR);
+    const int tabWidth = textWidth + tabHorizontalPadding;
+    const int selectedTabWidth = tabWidth + selectedTabExtraWidth;
+    const bool isActiveSelectedTab = tab.selected && isTabBarActive;
 
     if (tab.selected) {
-      if (selected) {
-        renderer.fillRoundedRect(currentX, rect.y + 1, textWidth + 2 * hPaddingInSelection, rect.height - 4,
-                                 cornerRadius, Color::Black);
+      if (isActiveSelectedTab) {
+        drawActiveSelectedTab(currentX, selectedTabWidth);
       } else {
-        renderer.fillRectDither(currentX, rect.y, textWidth + 2 * hPaddingInSelection, rect.height - 3,
-                                Color::LightGray);
-        renderer.drawLine(currentX, rect.y + rect.height - 3, currentX + textWidth + 2 * hPaddingInSelection,
-                          rect.y + rect.height - 3, 2, true);
+        drawInactiveSelectedTab(currentX, selectedTabWidth);
       }
     }
 
-    renderer.drawText(UI_10_FONT_ID, currentX + hPaddingInSelection, rect.y + 6, tab.label, !(tab.selected && selected),
+    renderer.drawText(UI_10_FONT_ID,
+                      currentX + hPaddingInSelection + labelXOffset,
+                      labelY,
+                      tab.label,
+                      !isActiveSelectedTab,
                       EpdFontFamily::REGULAR);
 
-    currentX += textWidth + LyraMetrics::values.tabSpacing + 2 * hPaddingInSelection;
+    currentX += tabWidth + tabSpacing;
   }
 
-  renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1, true);
+  renderer.drawLine(rect.x,
+                    bottomBorderY,
+                    rect.x + rect.width - bottomBorderInset,
+                    bottomBorderY,
+                    true);
 }
+
 
 void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
                          const std::function<std::string(int index)>& rowTitle,
@@ -264,9 +323,11 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
                          const std::function<UIIcon(int index)>& rowIcon,
                          const std::function<std::string(int index)>& rowValue, bool highlightValue,
                          const std::function<bool(int index)>& rowDimmed) const {
-  int rowHeight =
-      (rowSubtitle != nullptr) ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
-  int pageItems = rect.height / rowHeight;
+  const bool hasSubtitle = rowSubtitle != nullptr;
+  const bool hasIcon = rowIcon != nullptr;
+  const bool hasValue = rowValue != nullptr;
+  const int rowHeight = hasSubtitle ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
+  const int pageItems = rect.height / rowHeight;
 
   const int totalPages = (itemCount + pageItems - 1) / pageItems;
   if (totalPages > 1) {
@@ -295,27 +356,55 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
   int textX = rect.x + LyraMetrics::values.contentSidePadding + hPaddingInSelection;
   int textWidth = contentWidth - LyraMetrics::values.contentSidePadding * 2 - hPaddingInSelection * 2;
   int iconSize;
-  if (rowIcon != nullptr) {
-    iconSize = (rowSubtitle != nullptr) ? mainMenuIconSize : listIconSize;
+  if (hasIcon) {
+    iconSize = hasSubtitle ? mainMenuIconSize : listIconSize;
     textX += iconSize + hPaddingInSelection;
     textWidth -= iconSize + hPaddingInSelection;
   }
 
+  const int valueFontSize = std::max(1, renderer.getTextHeight(UI_10_FONT_ID));
+  const int valuePaddingX = std::max(12, (valueFontSize * 9 + 5) / 10);  // ~0.9em
+  const int valuePaddingY = std::max(8, (valueFontSize + 1) / 2);         // ~0.5em
+  constexpr int valueBgRightExtension = 4;
+  constexpr int valueBgBottomExtension = 1;
+  constexpr int valueBgSafeRightMargin = 2;
+  constexpr int valueBgXOffset = -2;
+  constexpr int valueVisualYOffset = -2;
+
   // Draw all items
-  const auto pageStartIndex = selectedIndex / pageItems * pageItems;
-  int iconY = (rowSubtitle != nullptr) ? 16 : 10;
+  const int pageStartIndex = selectedIndex / pageItems * pageItems;
+  const int iconY = hasSubtitle ? 16 : 10;
   for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {
     const int itemY = rect.y + (i % pageItems) * rowHeight;
     int rowTextWidth = textWidth;
 
     // Draw name
-    int valueWidth = 0;
+    int valueBgWidth = 0;
+    int valueBgHeight = 0;
+    int valueBgX = 0;
+    int valueBgY = itemY;
+    int valueTextX = 0;
+    int valueTextY = itemY + 6;
     std::string valueText = "";
-    if (rowValue != nullptr) {
+    if (hasValue) {
       valueText = rowValue(i);
       valueText = renderer.truncatedText(UI_10_FONT_ID, valueText.c_str(), maxListValueWidth);
-      valueWidth = renderer.getTextWidth(UI_10_FONT_ID, valueText.c_str()) + hPaddingInSelection;
-      rowTextWidth -= valueWidth;
+      const TextBounds valueBounds = renderer.getTextBounds(UI_10_FONT_ID, valueText.c_str());
+      valueBgWidth = valueBounds.width + 2 * valuePaddingX;
+      valueBgHeight = valueBounds.height + 2 * valuePaddingY;
+      valueBgY = itemY;
+      if (valueBgHeight < rowHeight) {
+        valueBgY += (rowHeight - valueBgHeight) / 2;
+      }
+      valueBgX = rect.x + contentWidth - LyraMetrics::values.contentSidePadding - listValueRightInset - valueBgWidth;
+      valueBgX += valueBgXOffset;
+      valueTextX = valueBgX + valuePaddingX - valueBounds.x + valueBgSafeRightMargin;
+      valueTextY = valueBgY + valuePaddingY - valueBounds.y + valueVisualYOffset;
+      const int maxValueBgRight =
+          rect.x + contentWidth - LyraMetrics::values.contentSidePadding - valueBgSafeRightMargin;
+      valueBgWidth += std::max(0, std::min(valueBgRightExtension, maxValueBgRight - (valueBgX + valueBgWidth)));
+      valueBgHeight += valueBgBottomExtension;
+      rowTextWidth -= valueBgWidth + listValueRightInset;
     }
 
     auto itemName = rowTitle(i);
@@ -356,13 +445,11 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
     // Draw value
     if (!valueText.empty()) {
       if (i == selectedIndex && highlightValue) {
-        renderer.fillRoundedRect(
-            contentWidth - LyraMetrics::values.contentSidePadding - hPaddingInSelection - valueWidth, itemY,
-            valueWidth + hPaddingInSelection, rowHeight, cornerRadius, Color::Black);
+        renderer.fillRoundedRect(valueBgX+valueBgRightExtension, valueBgY, valueBgWidth, valueBgHeight, cornerRadius, Color::Black);
       }
 
-      renderer.drawText(UI_10_FONT_ID, rect.x + contentWidth - LyraMetrics::values.contentSidePadding - valueWidth,
-                        itemY + 6, valueText.c_str(), !(i == selectedIndex && highlightValue));
+      renderer.drawText(UI_10_FONT_ID, valueTextX, valueTextY, valueText.c_str(),
+                        !(i == selectedIndex && highlightValue));
     }
   }
 }

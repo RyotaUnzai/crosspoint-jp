@@ -12,7 +12,6 @@
 #include "components/icons/book_finished24.h"
 #include "components/icons/book_reading24.h"
 #include "components/icons/book24.h"
-#include "components/icons/cover.h"
 #include "fontIds.h"
 
 // Internal constants
@@ -76,7 +75,6 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
                             tileY + hPaddingInSelection + (Lyra3CoversMetrics::values.homeCoverHeight / 3),
                             tileWidth - 2 * hPaddingInSelection, 2 * Lyra3CoversMetrics::values.homeCoverHeight / 3,
                             true);
-          renderer.drawIcon(CoverIcon, tileX + hPaddingInSelection + 24, tileY + hPaddingInSelection + 24, 32, 32);
         }
       }
 
@@ -94,21 +92,13 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
       const int maxLineWidth = tileWidth - 2 * hPaddingInSelection - titleIconSize - titleIconGap;
       auto titleLines = renderer.wrappedText(SMALL_FONT_ID, recentBooks[i].title.c_str(), maxLineWidth, 3);
 
-      constexpr int readingStatusIconSize = 24;
-      constexpr int readingStatusIconTopMargin = 4;
-      const bool hasReadingStatusIcon =
-          i < static_cast<int>(bookStatuses.size()) &&
-          (bookStatuses[i] == ReadingStatus::Reading || bookStatuses[i] == ReadingStatus::Finished);
-
       const int titleLineHeight = renderer.getLineHeight(SMALL_FONT_ID);
       const int titlePrefixHeight = std::max(titleLineHeight, titleIconSize);
       const int dynamicBlockHeight = titleLines.empty()
                                          ? 0
                                          : titlePrefixHeight + (static_cast<int>(titleLines.size()) - 1) * titleLineHeight;
-      const int readingStatusBlockHeight =
-          hasReadingStatusIcon ? (readingStatusIconSize + readingStatusIconTopMargin) : 0;
       // Add a little padding below the text inside the selection box just like the top padding (5 + hPaddingSelection)
-      const int dynamicTitleBoxHeight = dynamicBlockHeight + readingStatusBlockHeight + hPaddingInSelection + 5;
+      const int dynamicTitleBoxHeight = dynamicBlockHeight + hPaddingInSelection + 5;
 
       if (bookSelected) {
         // Draw selection box
@@ -129,6 +119,19 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
       const int titlePrefixOffsetY = (titlePrefixHeight - titleLineHeight) / 2;
       const int titleIconOffsetY = (titlePrefixHeight - titleIconSize) / 2;
       const uint8_t* titleIconBitmap = Book24Icon;
+      if (i < static_cast<int>(bookStatuses.size())) {
+        switch (bookStatuses[i]) {
+          case ReadingStatus::Unread:
+            titleIconBitmap = Book24Icon;
+            break;
+          case ReadingStatus::Reading:
+            titleIconBitmap = BookReading24Icon;
+            break;
+          case ReadingStatus::Finished:
+            titleIconBitmap = BookFinished24Icon;
+            break;
+        }
+      }
 
       for (const auto& line : titleLines) {
         if (line == titleLines.front()) {
@@ -138,13 +141,6 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
           renderer.drawText(SMALL_FONT_ID, titleTextX, currentY, line.c_str(), true);
         }
         currentY += titleLineHeight;
-      }
-      if (hasReadingStatusIcon) {
-        currentY += readingStatusIconTopMargin;
-        const uint8_t* iconBitmap =
-            (bookStatuses[i] == ReadingStatus::Finished) ? BookFinished24Icon : BookReading24Icon;
-        renderer.drawIcon(iconBitmap, tileX + hPaddingInSelection, currentY, readingStatusIconSize,
-                          readingStatusIconSize);
       }
     }
   } else {

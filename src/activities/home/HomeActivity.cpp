@@ -27,6 +27,7 @@ int HomeActivity::getMenuItemCount() const {
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
+  
   if (hasOpdsUrl) {
     count++;
   }

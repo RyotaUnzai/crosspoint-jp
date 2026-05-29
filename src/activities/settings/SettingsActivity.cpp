@@ -137,6 +137,15 @@ void SettingsActivity::onExit() {
   UITheme::getInstance().reload();  // Re-apply theme in case it was changed
 }
 
+void SettingsActivity::enterCategory(int categoryIndex) {
+  if (categoryCount <= 0) {
+    selectedCategoryIndex = 0;
+  } else {
+    selectedCategoryIndex = (categoryIndex % categoryCount + categoryCount) % categoryCount;
+  }
+  rebuildSettingsLists();
+}
+
 void SettingsActivity::loop() {
   if (skipNextButtonCheck) {
     const bool confirmCleared = !mappedInput.isPressed(MappedInputManager::Button::Confirm) &&
@@ -150,6 +159,11 @@ void SettingsActivity::loop() {
   }
 
   bool hasChangedCategory = false;
+  const auto tabNavigationActive = [this]() {
+    return mappedInput.isPressed(MappedInputManager::Button::Up) || mappedInput.isPressed(MappedInputManager::Button::Down) ||
+           mappedInput.wasPressed(MappedInputManager::Button::Up) || mappedInput.wasPressed(MappedInputManager::Button::Down) ||
+           mappedInput.wasReleased(MappedInputManager::Button::Up) || mappedInput.wasReleased(MappedInputManager::Button::Down);
+  };
 
   // Handle actions with early return
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
@@ -179,28 +193,44 @@ void SettingsActivity::loop() {
     return;
   }
 
+  if (tabNavGestureActive) {
+    if (tabNavigationActive()) {
+      return;
+    }
+    tabNavGestureActive = false;
+  }
+
+  if (mappedInput.wasPressed(MappedInputManager::Button::Up)) {
+    enterCategory(ButtonNavigator::previousIndex(selectedCategoryIndex, categoryCount));
+    if (selectedSettingIndex > settingsCount) selectedSettingIndex = settingsCount;
+    tabNavGestureActive = true;
+    requestUpdate();
+    return;
+  }
+  if (mappedInput.wasPressed(MappedInputManager::Button::Down)) {
+    enterCategory(ButtonNavigator::nextIndex(selectedCategoryIndex, categoryCount));
+    if (selectedSettingIndex > settingsCount) selectedSettingIndex = settingsCount;
+    tabNavGestureActive = true;
+    requestUpdate();
+    return;
+  }
+  if (mappedInput.isPressed(MappedInputManager::Button::Up) || mappedInput.isPressed(MappedInputManager::Button::Down)) {
+    tabNavGestureActive = true;
+    return;
+  }
+
   // Handle navigation
-  buttonNavigator.onNextRelease([this] {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
     selectedSettingIndex = ButtonNavigator::nextIndex(selectedSettingIndex, settingsCount + 1);
     requestUpdate();
-  });
+    return;
+  }
 
-  buttonNavigator.onPreviousRelease([this] {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
     selectedSettingIndex = ButtonNavigator::previousIndex(selectedSettingIndex, settingsCount + 1);
     requestUpdate();
-  });
-
-  buttonNavigator.onNextContinuous([this, &hasChangedCategory] {
-    hasChangedCategory = true;
-    selectedCategoryIndex = ButtonNavigator::nextIndex(selectedCategoryIndex, categoryCount);
-    requestUpdate();
-  });
-
-  buttonNavigator.onPreviousContinuous([this, &hasChangedCategory] {
-    hasChangedCategory = true;
-    selectedCategoryIndex = ButtonNavigator::previousIndex(selectedCategoryIndex, categoryCount);
-    requestUpdate();
-  });
+    return;
+  }
 
   if (hasChangedCategory) {
     selectedSettingIndex = (selectedSettingIndex == 0) ? 0 : 1;
